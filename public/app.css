@@ -516,6 +516,7 @@ svg.i.filled { fill: currentColor; }
 .fav-row.active { background: var(--accent-soft); }
 .fav-row.active .fav-title { color: var(--accent); font-weight: 500; }
 .fav-row .doc { width: 16px; height: 16px; margin-right: 6px; color: var(--faint); }
+.fav-row .tree-num { min-width: 0; margin-right: 8px; }
 .fav-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fav-title.untitled { color: var(--faint); }
 .fav-row.done .fav-title { color: var(--faint); text-decoration: line-through; }
