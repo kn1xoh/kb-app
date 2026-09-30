@@ -492,7 +492,7 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: color-mix(in
 .outline-row .toc-title { font-family: var(--font-ui); }
 .outline-row.depth-0 .toc-title { font: 600 15.5px/1.4 var(--font-ui); }
 .outline-row:not(.depth-0) .toc-title { font-weight: 400; }
-.outline-row .toc-num { font-family: var(--font-ui); font-size: 13px; }
+.outline-row .toc-num { min-width: 0; margin-right: 2px; font-family: var(--font-ui); font-size: 13px; }
 .outline-row.depth-0 .toc-num { font-weight: 600; }
 
 /* notes home: «Недавно изменённые» — same rhythm as the outline above */
