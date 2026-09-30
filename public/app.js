@@ -555,7 +555,7 @@ function renderNotesHome() {
     const closed = !homeExpanded.has(p.id);
     const state = !sel ? '' : S.selected.has(p.id) ? 'on' : sel.all.has(p.id) ? 'on implied' : '';
     rows.push(`<li><a class="outline-row depth-${Math.min(depth, 3)} ${state ? 'selected' : ''}" href="#/notes/${p.id}" ${S.selectMode ? '' : 'draggable="true"'} data-id="${p.id}" style="padding-left:${12 + depth * 26}px">
-      ${S.selectMode ? `<span class="sel-box ${state}" role="checkbox" aria-checked="${!!state}" aria-label="Выбрать"></span>` : ''}
+      <span class="sel-box ${state}" role="checkbox" aria-checked="${!!state}" aria-label="Выбрать" title="Выбрать"></span>
       ${kids ? `<button class="twisty ${closed ? '' : 'open'}" data-home="toggle" aria-label="${closed ? 'Развернуть' : 'Свернуть'}">${icon('chevron')}</button>` : '<span class="twisty"></span>'}
       ${numOrIcon(nums, p.id, 'toc-num')}
       <span class="toc-title">${esc(titleOf(p))}${p.favorite_at ? icon('star', 'filled mini-star') : ''}</span>
@@ -612,6 +612,12 @@ function renderNotesHome() {
       e.preventDefault();
       homeExpanded.has(id) ? homeExpanded.delete(id) : homeExpanded.add(id);
       saveHomeExpanded();
+      return renderNotesHome();
+    }
+    if (!S.selectMode && e.target.closest('.sel-box')) {
+      e.preventDefault();
+      S.selectMode = true;
+      S.selected = new Set([id]);
       return renderNotesHome();
     }
     if (S.selectMode) {
