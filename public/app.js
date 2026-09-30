@@ -93,12 +93,20 @@ async function api(method, url, body) {
   return data;
 }
 
-function toast(text, type = '') {
+// action: { label, fn } — кнопка в уведомлении (например «Отменить»); такое уведомление висит дольше
+function toast(text, type = '', action = null) {
   const el = document.createElement('div');
   el.className = `toast ${type}`;
   el.textContent = text;
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toast-action';
+    b.textContent = action.label;
+    b.onclick = () => { el.remove(); action.fn(); };
+    el.append(b);
+  }
   $('#toasts').append(el);
-  setTimeout(() => el.remove(), 3200);
+  setTimeout(() => el.remove(), action ? 7000 : 3200);
 }
 const fail = (e) => toast(e.message, 'error');
 
@@ -114,6 +122,8 @@ const S = {
   numbering: store.get('kb-numbering', true),
   selectMode: false, // bulk selection on the notes home
   selected: new Set(),
+  trash: null, // «Недавно удалённые» заметки: { days, items }, null — ещё не загружено
+  trashOpen: store.get('kb-trash-open', false),
 };
 const saveExpanded = () => store.set('kb-expanded', [...S.expanded]);
 
@@ -416,21 +426,16 @@ function openPageMenu(anchor, id) {
   });
 }
 
+// Удаление не спрашивает подтверждения: заметка уходит в «Недавно удалённые», её можно вернуть
 async function deletePage(p) {
-  const n = descendants(p.id).length;
-  const ok = await confirmDialog({
-    title: `Удалить «${titleOf(p)}»?`,
-    text: n ? `Подзаметки (${n}) тоже будут удалены. Отменить удаление нельзя.` : 'Отменить удаление нельзя.',
-    okText: 'Удалить',
-    danger: true,
-  });
-  if (!ok) return;
   try {
     const removed = new Set([p.id, ...descendants(p.id)]);
-    await api('DELETE', `/api/pages/${p.id}`);
+    const { trashed } = await api('DELETE', `/api/pages/${p.id}`);
     S.pages = S.pages.filter((x) => !removed.has(x.id));
+    S.trash = null;
     updateCounts();
-    toast('Заметка удалена');
+    toast(removed.size > 1 ? `Заметка и подзаметки (${removed.size - 1}) удалены` : 'Заметка удалена', '',
+      { label: 'Отменить', fn: () => restorePages(trashed, { undo: true }) });
     if (S.page && removed.has(S.page.id)) {
       S.page = null;
       pageSave.cancel();
@@ -598,8 +603,11 @@ function renderNotesHome() {
         <h2>Здесь будут ваши заметки</h2>
         <p>Создайте первую заметку. Внутрь любой заметки можно добавлять подзаметки — так получится структура базы.</p>
       </div>`}
+      ${trashSection()}
     </div>`;
   $('#home-new').onclick = () => createPage(null);
+  bindTrash();
+  if (S.trash === null) loadTrash();
   const outline = $('#outline');
   if (!outline) return;
   if (!S.selectMode) enablePageDnD(outline, '.outline-row', { axis: 'y' });
@@ -635,7 +643,7 @@ function renderNotesHome() {
       S.selected = new Set(allSelected ? [] : childrenOf(null).map((p) => p.id));
       renderNotesHome();
     };
-    $('#sel-delete').onclick = confirmBulkDelete;
+    $('#sel-delete').onclick = bulkDelete;
   }
   $('#toggle-all').onclick = () => {
     if (anyOpen) homeExpanded.clear();
@@ -652,52 +660,125 @@ function selectionInfo() {
   return { roots, all, total: all.size };
 }
 
-function confirmBulkDelete() {
+async function bulkDelete() {
   const { roots, all, total } = selectionInfo();
   if (!total) return;
-  const names = roots.slice(0, 5).map((id) => `<li>${esc(titleOf(pageById(id)))}${descendants(id).length ? ` <span class="muted">+ ${descendants(id).length} подзам.</span>` : ''}</li>`).join('');
-  const m = openModal(`
-    <h2>Удалить ${total} ${plural(total, 'заметку', 'заметки', 'заметок')}?</h2>
-    <p>Заметки будут удалены навсегда вместе с подзаметками. Восстановить их нельзя.</p>
-    <ul class="bulk-list">${names}${roots.length > 5 ? `<li class="muted">и ещё ${roots.length - 5}…</li>` : ''}</ul>
-    <form id="bulk-form">
-      <label class="field"><span>Чтобы подтвердить, введите слово УДАЛИТЬ</span>
-        <input class="input" id="bulk-confirm" autocomplete="off" spellcheck="false" placeholder="УДАЛИТЬ"></label>
-      <p class="error-text" id="bulk-err"></p>
-      <div class="modal-actions">
-        <button type="button" class="btn" data-close>Отмена</button>
-        <button class="btn danger solid" id="bulk-go" disabled>Удалить навсегда</button>
-      </div>
-    </form>`);
-  const input = $('#bulk-confirm', m);
-  const go = $('#bulk-go', m);
-  const ok = () => input.value.trim().toUpperCase() === 'УДАЛИТЬ';
-  input.focus();
-  input.oninput = () => { go.disabled = !ok(); };
-  $('#bulk-form', m).onsubmit = async (e) => {
-    e.preventDefault();
-    if (!ok()) return;
-    go.disabled = true;
-    input.disabled = true;
-    let done = 0;
-    try {
-      for (const id of roots) {
-        go.textContent = `Удаление… ${done + 1} из ${roots.length}`;
-        await api('DELETE', `/api/pages/${id}`);
-        done++;
-      }
-      S.pages = S.pages.filter((p) => !all.has(p.id));
-      toast(`Удалено: ${total} ${plural(total, 'заметка', 'заметки', 'заметок')}`);
-    } catch (err) {
-      S.pages = await api('GET', '/api/pages').catch(() => S.pages);
-      toast(`Удалено не всё: ${err.message}`, 'error');
-    }
-    closeModal(m);
-    S.selectMode = false;
-    S.selected.clear();
-    updateCounts();
+  try {
+    const { trashed } = await api('POST', '/api/pages/delete', { ids: roots });
+    S.pages = S.pages.filter((p) => !all.has(p.id));
+    S.trash = null;
+    toast(`Удалено: ${total} ${plural(total, 'заметка', 'заметки', 'заметок')}`, '',
+      { label: 'Отменить', fn: () => restorePages(trashed, { undo: true }) });
+  } catch (err) {
+    S.pages = await api('GET', '/api/pages').catch(() => S.pages);
+    fail(err);
+  }
+  S.selectMode = false;
+  S.selected.clear();
+  updateCounts();
+  renderNotesHome();
+}
+
+/* =========================================================
+   Notes: «Недавно удалённые» (корзина только для заметок)
+   ========================================================= */
+const onNotesHome = () => !S.page && (location.hash === '#/notes' || location.hash === '' || location.hash === '#/');
+
+async function loadTrash() {
+  try { S.trash = await api('GET', '/api/trash/pages'); } catch (e) { S.trash = { days: 30, items: [] }; fail(e); }
+  if (onNotesHome()) renderNotesHome();
+}
+
+// Сколько дней осталось до окончательного удаления
+function trashDaysLeft(item, days) {
+  return Math.ceil((toDate(item.deleted_at).getTime() + days * 864e5 - Date.now()) / 864e5);
+}
+
+function trashSection() {
+  const t = S.trash;
+  const n = t ? t.items.length : 0;
+  const head = `
+    <div class="toc-head">
+      <h3><button class="trash-toggle ${S.trashOpen ? 'open' : ''}" id="trash-toggle" aria-expanded="${S.trashOpen}">
+        ${icon('chevron')}<span>Недавно удалённые</span>${n ? `<span class="trash-n">${n}</span>` : ''}</button></h3>
+      ${S.trashOpen && n ? '<button class="btn ghost" id="trash-clear">Очистить</button>' : ''}
+    </div>`;
+  if (!S.trashOpen) return `<section class="trash">${head}</section>`;
+  if (!t) return `<section class="trash">${head}<p class="toc-empty">Загрузка…</p></section>`;
+  if (!n) return `<section class="trash">${head}<p class="toc-empty">Здесь пусто. Удалённые заметки хранятся ${t.days} дней, потом удаляются навсегда.</p></section>`;
+  const rows = t.items.map((it) => {
+    const left = trashDaysLeft(it, t.days);
+    const where = it.parent_title !== null && it.parent_title !== undefined
+      ? `была в «${esc(it.parent_title.trim() || 'Без названия')}»` : '';
+    const sub = it.sub_count ? `+ ${it.sub_count} ${plural(it.sub_count, 'подзаметка', 'подзаметки', 'подзаметок')}` : '';
+    return `<li class="trash-row" data-id="${it.id}">
+      ${icon('file')}
+      <span class="trash-main">
+        <span class="toc-title">${esc(it.title.trim() || 'Без названия')}</span>
+        ${sub || where ? `<span class="trash-sub">${[sub, where].filter(Boolean).join(' · ')}</span>` : ''}
+      </span>
+      <span class="trash-meta ${left <= 3 ? 'soon' : ''}">удалена ${ago(it.deleted_at)} · ${left <= 1 ? 'удалится сегодня' : `осталось ${left} дн.`}</span>
+      <button class="btn ghost" data-trash="restore">Восстановить</button>
+      <button class="icon-btn" data-trash="purge" title="Удалить навсегда" aria-label="Удалить навсегда">${icon('trash')}</button>
+    </li>`;
+  }).join('');
+  return `<section class="trash">${head}
+    <p class="hint">Удалённые заметки хранятся ${t.days} дней, потом удаляются навсегда.</p>
+    <ol class="toc trash-list">${rows}</ol></section>`;
+}
+
+function bindTrash() {
+  $('#trash-toggle').onclick = () => {
+    S.trashOpen = !S.trashOpen;
+    store.set('kb-trash-open', S.trashOpen);
     renderNotesHome();
   };
+  $('#trash-clear')?.addEventListener('click', async () => {
+    const n = S.trash.items.length;
+    const ok = await confirmDialog({
+      title: 'Очистить «Недавно удалённые»?',
+      text: `${n} ${plural(n, 'запись будет удалена', 'записи будут удалены', 'записей будут удалены')} навсегда вместе с подзаметками. Вернуть их будет нельзя.`,
+      okText: 'Удалить навсегда',
+      danger: true,
+    });
+    if (!ok) return;
+    try { await api('DELETE', '/api/trash/pages'); toast('Корзина очищена'); } catch (e) { fail(e); }
+    loadTrash();
+  });
+  $('.trash-list')?.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-trash]');
+    if (!b) return;
+    const id = Number(b.closest('.trash-row').dataset.id);
+    const it = S.trash.items.find((x) => x.id === id);
+    if (b.dataset.trash === 'restore') return restorePages([id]);
+    const ok = await confirmDialog({
+      title: `Удалить «${it.title.trim() || 'Без названия'}» навсегда?`,
+      text: it.sub_count ? `Вместе с подзаметками (${it.sub_count}). Вернуть будет нельзя.` : 'Вернуть заметку будет нельзя.',
+      okText: 'Удалить навсегда',
+      danger: true,
+    });
+    if (!ok) return;
+    try { await api('DELETE', `/api/trash/pages/${id}`); toast('Удалено навсегда'); } catch (err) { fail(err); }
+    loadTrash();
+  });
+}
+
+async function restorePages(ids, { undo = false } = {}) {
+  try {
+    const { restored } = await api('POST', '/api/trash/pages/restore', { ids });
+    S.pages = await api('GET', '/api/pages');
+    S.trash = null;
+    updateCounts();
+    if (undo) toast('Удаление отменено');
+    else if (restored.length === 1) {
+      const r = restored[0];
+      const title = titleOf(pageById(r.id));
+      toast(!r.moved ? `«${title}» восстановлена`
+        : r.parent_id ? `«${title}» восстановлена в «${titleOf(pageById(r.parent_id))}»`
+          : `«${title}» восстановлена на верхний уровень`);
+    }
+    if (S.page) { renderTree(); renderSubpages(); } else if (onNotesHome()) renderNotesHome(); else renderTree();
+  } catch (e) { fail(e); }
 }
 
 const plural = (n, one, few, many) => {

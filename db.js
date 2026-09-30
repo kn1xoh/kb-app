@@ -79,6 +79,11 @@ const addColumn = (table, column, type) => {
 };
 addColumn('pages', 'favorite_at', 'TEXT');
 addColumn('tasks', 'favorite_at', 'TEXT');
+// Корзина заметок: deleted_at — когда удалена, deleted_batch — id заметки, которую удалил пользователь
+// (её подзаметки уходят в корзину вместе с ней и восстанавливаются тоже вместе)
+addColumn('pages', 'deleted_at', 'TEXT');
+addColumn('pages', 'deleted_batch', 'INTEGER');
+db.exec('CREATE INDEX IF NOT EXISTS idx_pages_trash ON pages(user_id, deleted_batch)');
 
 db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
 

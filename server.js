@@ -152,7 +152,7 @@ function validateUserInput(email, password, passwordOptional = false) {
 
 app.get('/api/admin/users', auth, admin, (req, res) => {
   res.json(db.prepare(`SELECT u.id, u.email, u.name, u.is_admin, u.created_at,
-    (SELECT COUNT(*) FROM pages p WHERE p.user_id = u.id) AS pages,
+    (SELECT COUNT(*) FROM pages p WHERE p.user_id = u.id AND p.deleted_at IS NULL) AS pages,
     (SELECT COUNT(*) FROM tasks t WHERE t.user_id = u.id) AS tasks
     FROM users u ORDER BY u.created_at`).all().map((u) => ({ ...u, is_admin: !!u.is_admin })));
 });
@@ -195,11 +195,12 @@ app.delete('/api/admin/users/:id', auth, admin, (req, res) => {
 
 // ---------- pages (notes tree) ----------
 
-const getPage = (userId, id) => db.prepare('SELECT * FROM pages WHERE id = ? AND user_id = ?').get(id, userId);
+// getPage видит только живые заметки; удалённые (в корзине) для него как будто не существуют
+const getPage = (userId, id) => db.prepare('SELECT * FROM pages WHERE id = ? AND user_id = ? AND deleted_at IS NULL').get(id, userId);
 
 app.get('/api/pages', auth, (req, res) => {
   res.json(db.prepare(`SELECT id, parent_id, title, position, updated_at, favorite_at FROM pages
-    WHERE user_id = ? ORDER BY position, id`).all(req.user.id));
+    WHERE user_id = ? AND deleted_at IS NULL ORDER BY position, id`).all(req.user.id));
 });
 
 app.get('/api/pages/:id', auth, (req, res) => {
@@ -243,7 +244,7 @@ app.post('/api/pages/:id/move', auth, (req, res) => {
     }
   }
   const siblings = db.prepare(`SELECT id FROM pages WHERE user_id = ? AND parent_id IS ? AND id != ?
-    ORDER BY position, id`).all(req.user.id, parentId, page.id).map((r) => r.id);
+    AND deleted_at IS NULL ORDER BY position, id`).all(req.user.id, parentId, page.id).map((r) => r.id);
   const index = Math.max(0, Math.min(Number(req.body?.index ?? siblings.length), siblings.length));
   siblings.splice(index, 0, page.id);
   const upd = db.prepare('UPDATE pages SET parent_id = ?, position = ? WHERE id = ?');
@@ -258,11 +259,111 @@ app.post('/api/pages/:id/favorite', auth, (req, res) => {
   res.json({ favorite_at: getPage(req.user.id, page.id).favorite_at });
 });
 
+// ---------- notes trash («Недавно удалённые») ----------
+
+const TRASH_DAYS = 30;
+const sqlNow = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+// Кладёт заметки в корзину вместе с подзаметками. Если выбраны и заметка, и её подзаметка —
+// в корзину уходит одна запись (родитель), чтобы восстанавливать их вместе.
+function trashPages(userId, ids) {
+  const pages = [...new Set(ids.map(Number))].map((id) => getPage(userId, id)).filter(Boolean);
+  const chosen = new Set(pages.map((p) => p.id));
+  const hasChosenAncestor = (p) => {
+    for (let cur = p.parent_id; cur !== null; cur = getPage(userId, cur)?.parent_id ?? null) {
+      if (chosen.has(cur)) return true;
+    }
+    return false;
+  };
+  const roots = pages.filter((p) => !hasChosenAncestor(p)).map((p) => p.id);
+  const now = sqlNow();
+  const mark = db.prepare(`WITH RECURSIVE sub(id) AS (
+      SELECT ? UNION ALL SELECT p.id FROM pages p JOIN sub ON p.parent_id = sub.id WHERE p.deleted_at IS NULL)
+    UPDATE pages SET deleted_at = ?, deleted_batch = ? WHERE id IN (SELECT id FROM sub) AND user_id = ?`);
+  db.transaction(() => roots.forEach((id) => mark.run(id, now, id, userId)))();
+  return roots;
+}
+
+// Возвращает заметку на прежнее место. Если родитель тоже удалён — к ближайшему живому предку
+// (или на верхний уровень) и в конец списка.
+function restorePages(userId, batchIds) {
+  const anyPage = db.prepare('SELECT * FROM pages WHERE id = ? AND user_id = ?');
+  const restored = [];
+  db.transaction(() => batchIds.map(Number).forEach((id) => {
+    const root = anyPage.get(id, userId);
+    if (!root || root.deleted_batch !== root.id) return;
+    let target = root.parent_id;
+    while (target !== null) {
+      const parent = anyPage.get(target, userId);
+      if (!parent) { target = null; break; }
+      if (!parent.deleted_at) break;
+      target = parent.parent_id;
+    }
+    if (target !== root.parent_id) {
+      const pos = db.prepare(`SELECT COALESCE(MAX(position), -1) + 1 AS p FROM pages
+        WHERE user_id = ? AND parent_id IS ? AND deleted_at IS NULL`).get(userId, target).p;
+      db.prepare('UPDATE pages SET parent_id = ?, position = ? WHERE id = ?').run(target, pos, root.id);
+    }
+    db.prepare('UPDATE pages SET deleted_at = NULL, deleted_batch = NULL WHERE deleted_batch = ? AND user_id = ?')
+      .run(root.id, userId);
+    restored.push({ id: root.id, parent_id: target, moved: target !== root.parent_id });
+  }))();
+  return restored;
+}
+
+function purgeBatch(userId, batchId) {
+  db.transaction(() => {
+    // заметки, удалённые раньше отдельно, но лежавшие внутри — не теряем, а отвязываем от родителя
+    db.prepare(`UPDATE pages SET parent_id = NULL WHERE user_id = ? AND deleted_batch != ?
+      AND parent_id IN (SELECT id FROM pages WHERE deleted_batch = ?)`).run(userId, batchId, batchId);
+    db.prepare('DELETE FROM pages WHERE deleted_batch = ? AND user_id = ?').run(batchId, userId);
+  })();
+}
+
+function purgeExpired() {
+  const old = db.prepare(`SELECT id, user_id FROM pages WHERE deleted_batch = id
+    AND deleted_at < datetime('now', ?)`).all(`-${TRASH_DAYS} days`);
+  old.forEach((r) => purgeBatch(r.user_id, r.id));
+  if (old.length) console.log(`Корзина: окончательно удалены записи старше ${TRASH_DAYS} дней (${old.length})`);
+}
+purgeExpired();
+setInterval(purgeExpired, 6 * 3600e3).unref();
+
 app.delete('/api/pages/:id', auth, (req, res) => {
-  const page = getPage(req.user.id, req.params.id);
-  if (!page) return httpError(res, 404, 'Заметка не найдена');
-  db.prepare('DELETE FROM pages WHERE id = ?').run(page.id);
+  if (!getPage(req.user.id, req.params.id)) return httpError(res, 404, 'Заметка не найдена');
+  res.json({ trashed: trashPages(req.user.id, [req.params.id]) });
+});
+
+app.post('/api/pages/delete', auth, (req, res) => {
+  const ids = req.body?.ids;
+  if (!Array.isArray(ids) || !ids.length) return httpError(res, 400, 'Не выбраны заметки');
+  res.json({ trashed: trashPages(req.user.id, ids) });
+});
+
+app.get('/api/trash/pages', auth, (req, res) => {
+  const items = db.prepare(`SELECT r.id, r.title, r.deleted_at,
+      (SELECT COUNT(*) - 1 FROM pages s WHERE s.deleted_batch = r.id) AS sub_count,
+      par.title AS parent_title, par.deleted_at IS NOT NULL AS parent_deleted
+    FROM pages r LEFT JOIN pages par ON par.id = r.parent_id
+    WHERE r.user_id = ? AND r.deleted_batch = r.id ORDER BY r.deleted_at DESC, r.id DESC`).all(req.user.id);
+  res.json({ days: TRASH_DAYS, items: items.map((i) => ({ ...i, parent_deleted: !!i.parent_deleted })) });
+});
+
+app.post('/api/trash/pages/restore', auth, (req, res) => {
+  const ids = req.body?.ids;
+  if (!Array.isArray(ids) || !ids.length) return httpError(res, 400, 'Не выбраны заметки');
+  res.json({ restored: restorePages(req.user.id, ids) });
+});
+
+app.delete('/api/trash/pages/:id', auth, (req, res) => {
+  purgeBatch(req.user.id, Number(req.params.id));
   res.json({ ok: true });
+});
+
+app.delete('/api/trash/pages', auth, (req, res) => {
+  const ids = db.prepare('SELECT id FROM pages WHERE user_id = ? AND deleted_batch = id').all(req.user.id);
+  ids.forEach((r) => purgeBatch(req.user.id, r.id));
+  res.json({ ok: true, count: ids.length });
 });
 
 // ---------- tasks ----------
@@ -355,7 +456,7 @@ app.get('/api/search', auth, (req, res) => {
   const q = lower(req.query.q).trim();
   if (!q) return res.json({ pages: [], tasks: [] });
   const like = `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
-  const pages = db.prepare(`SELECT id, title, content FROM pages WHERE user_id = ? AND search_text LIKE ? ESCAPE '\\'
+  const pages = db.prepare(`SELECT id, title, content FROM pages WHERE user_id = ? AND deleted_at IS NULL AND search_text LIKE ? ESCAPE '\\'
     ORDER BY updated_at DESC LIMIT 20`).all(req.user.id, like)
     .map((p) => ({ id: p.id, title: p.title, snippet: snippet(plain(p.content), q) }));
   const tasks = db.prepare(`SELECT id, title, status, description FROM tasks WHERE user_id = ? AND search_text LIKE ? ESCAPE '\\'
