@@ -35,6 +35,15 @@ npm start
 npm run create-admin -- you@example.com "новый-пароль" "Имя"
 ```
 
+Добавить ~20 примеров заметок (чтобы посмотреть, как выглядит заполненная база):
+
+```bash
+npm run demo-notes                       # первому администратору
+npm run demo-notes -- you@example.com    # конкретному пользователю
+```
+
+Сервер останавливать не нужно — после запуска обновите страницу. Примеры удаляются как обычные заметки («Выбрать» → «Удалить»).
+
 ## Как получить обновления
 
 Код хранится на GitHub: https://github.com/kn1xoh/kb-app
@@ -127,6 +136,7 @@ sqlite3 ~/kb-app/data/kb.sqlite ".backup '/root/backups/kb-$(date +%F).sqlite'"
 server.js               API и раздача фронтенда
 db.js                   схема базы SQLite
 scripts/create-admin.js создание/сброс администратора из консоли
+scripts/demo-notes.js   примеры заметок для проверки внешнего вида
 public/index.html       страница приложения
 public/app.css          стили (цвета и шрифты — переменные в начале файла)
 public/app.js           интерфейс

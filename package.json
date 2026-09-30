@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server.js",
-    "create-admin": "node --disable-warning=ExperimentalWarning scripts/create-admin.js"
+    "create-admin": "node --disable-warning=ExperimentalWarning scripts/create-admin.js",
+    "demo-notes": "node --disable-warning=ExperimentalWarning scripts/demo-notes.js"
   },
   "engines": {
     "node": ">=22.13"

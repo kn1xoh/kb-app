@@ -487,7 +487,6 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: color-mix(in
 }
 @media (max-width: 560px) { .outline-row { grid-template-columns: 22px auto 1fr 28px; } .outline-row .toc-meta { display: none; } }
 #app { height: 100%; }
-.notes-home section .toc-num { min-width: 56px; }
 
 /* notes home: one typeface for all levels, hierarchy by weight and size only */
 .outline-row .toc-title { font-family: var(--font-ui); }
@@ -495,6 +494,16 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: color-mix(in
 .outline-row:not(.depth-0) .toc-title { font-weight: 400; }
 .outline-row .toc-num { font-family: var(--font-ui); font-size: 13px; }
 .outline-row.depth-0 .toc-num { font-weight: 600; }
+
+/* notes home: «Недавно изменённые» — same rhythm as the outline above */
+.notes-home section { display: grid; gap: 10px; margin-top: 8px; }
+.notes-home section .toc-head { margin: 0; }
+.recent-row { grid-template-columns: 44px 1fr auto; gap: 8px; align-items: center; padding: 10px 14px; font-size: 14.5px; }
+.recent-row .toc-num { min-width: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
+.recent-row svg.i { color: var(--faint); }
+.notes-home .toc-head h3 { white-space: nowrap; }
+.notes-home { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 560px) { .outline-tools .btn { padding: 0 6px; } .recent-row { grid-template-columns: 40px 1fr; padding: 10px 12px; } }
 
 /* ---------- favourites ---------- */
 svg.i.filled { fill: currentColor; }

@@ -591,7 +591,7 @@ function renderNotesHome() {
       </div>` : '<p class="hint">Перетаскивайте строки: к верхнему или нижнему краю строки — поменять порядок, в середину — вложить внутрь.</p>'}
       <section>
         <div class="toc-head"><h3>Недавно изменённые</h3></div>
-        <ol class="toc">${recent.map((p) => `<li><a class="toc-row" href="#/notes/${p.id}">
+        <ol class="toc">${recent.map((p) => `<li><a class="toc-row recent-row" href="#/notes/${p.id}">
           ${numOrIcon(nums, p.id, 'toc-num')}<span class="toc-title">${esc(titleOf(p))}</span><span class="toc-meta">${ago(p.updated_at)}</span></a></li>`).join('')}</ol>
       </section>` : `
       <div class="empty">
