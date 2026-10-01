@@ -455,7 +455,27 @@ const topPosition = (userId, status) => db.prepare(`SELECT COALESCE(MIN(position
   WHERE user_id = ? AND status = ? AND deleted_at IS NULL AND completed_at IS NULL`).get(userId, status).p;
 const idList = (ids) => (Array.isArray(ids) ? [...new Set(ids.map(Number).filter(Number.isInteger))] : []);
 
+// Задача без названия не остаётся (как заметки): с текстом в описании — название из его первой строки,
+// без текста — удаляется насовсем (в корзину не попадает)
+function setTaskTitle(t, title) {
+  db.prepare("UPDATE tasks SET title = ?, search_text = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(title, lower(`${title} ${plain(t.description)}`), t.id);
+}
+function finalizeTask(t) {
+  if (t.title.trim()) return { title: t.title };
+  const line = firstLine(t.description);
+  if (!line) {
+    db.prepare('DELETE FROM tasks WHERE id = ?').run(t.id);
+    return { deleted: true };
+  }
+  setTaskTitle(t, line);
+  return { title: line };
+}
+
 app.get('/api/tasks', auth, (req, res) => {
+  // задачи без названия, брошенные больше получаса назад (например, закрыли вкладку на телефоне)
+  db.prepare(`SELECT * FROM tasks WHERE user_id = ? AND deleted_at IS NULL AND trim(title) = ''
+    AND updated_at < datetime('now', '-30 minutes')`).all(req.user.id).forEach(finalizeTask);
   res.json(db.prepare('SELECT * FROM tasks WHERE user_id = ? AND deleted_at IS NULL ORDER BY position, id').all(req.user.id).map(taskOut));
 });
 
@@ -498,6 +518,31 @@ app.patch('/api/tasks/:id', auth, (req, res) => {
   res.json(taskOut(getTask(req.user.id, t.id)));
 });
 
+// Вызывается при закрытии карточки задачи без названия; можно сразу передать несохранённое описание
+app.post('/api/tasks/:id/finalize', auth, (req, res) => {
+  const t = getTask(req.user.id, req.params.id);
+  if (!t) return res.json({ deleted: true });
+  const b = req.body || {};
+  if (b.title !== undefined) t.title = String(b.title).trim().slice(0, 300);
+  if (b.description !== undefined) t.description = clean(b.description);
+  if (b.title !== undefined || b.description !== undefined) {
+    db.prepare(`UPDATE tasks SET title = ?, description = ?, search_text = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(t.title, t.description, lower(`${t.title} ${plain(t.description)}`), t.id);
+  }
+  res.json(finalizeTask(t));
+});
+
+// Задачи без названия, оставшиеся с прошлых версий
+{
+  const untitled = db.prepare("SELECT * FROM tasks WHERE trim(title) = ''").all();
+  untitled.forEach((t) => {
+    if (!t.deleted_at) return finalizeTask(t);
+    const line = firstLine(t.description);
+    if (line) setTaskTitle(t, line); else db.prepare('DELETE FROM tasks WHERE id = ?').run(t.id);
+  });
+  if (untitled.length) console.log(`Задачи без названия: обработано ${untitled.length}`);
+}
+
 // Завершить / вернуть в работу одну или несколько задач. Вернувшаяся задача встаёт первой в своём статусе
 // (если статуса уже нет — в статус по умолчанию)
 app.post('/api/tasks/complete', auth, (req, res) => {
@@ -538,17 +583,15 @@ app.post('/api/tasks/:id/favorite', auth, (req, res) => {
 
 // ---------- tasks trash («Недавно удалённые» задачи; у Заметок своя корзина) ----------
 
-// Удалённые задачи уходят в корзину. Совсем пустую задачу (без названия и описания) хранить незачем — удаляется сразу
+// Удалённые задачи уходят в корзину. Задача без названия сначала получает его из описания,
+// а совсем пустую хранить незачем — удаляется сразу
 function trashTasks(userId, ids) {
   const now = sqlNow();
   const trashed = [];
   db.transaction(() => ids.forEach((id) => {
     const t = getTask(userId, id);
     if (!t) return;
-    if (!t.title.trim() && !plain(t.description).trim()) {
-      db.prepare('DELETE FROM tasks WHERE id = ?').run(t.id);
-      return;
-    }
+    if (finalizeTask(t).deleted) return;
     db.prepare('UPDATE tasks SET deleted_at = ? WHERE id = ?').run(now, t.id);
     trashed.push(t.id);
   }))();

@@ -916,6 +916,7 @@ async function finalizePage(id) {
 }
 
 window.addEventListener('beforeunload', () => {
+  $('.panel')?.unloadFn?.();
   const data = pendingSave?.data || {};
   // заметка без названия — один запрос, который и сохраняет, и даёт название (или удаляет пустую)
   if (S.page && !pageById(S.page.id)?.title.trim()) sendNow('POST', `/api/pages/${S.page.id}/finalize`, data);
@@ -2027,19 +2028,46 @@ function openTaskPanel(id, { justCreated = false } = {}) {
       </div>
     </div>`;
   document.body.append(ov, panel);
+  let closed = null;
   const close = () => {
-    saveTitleNow();
-    saveDesc.flush();
+    if (closed) return closed;
     ov.remove(); panel.remove(); document.removeEventListener('keydown', onKey);
-    dropIfEmpty();
+    if (title.value.trim() || t.title.trim()) {
+      saveTitleNow();
+      saveDesc.flush();
+      return (closed = Promise.resolve());
+    }
+    return (closed = finalizeTask());
   };
-  // Новую задачу закрыли, ничего не написав, — не оставляем пустышку
-  const dropIfEmpty = async () => {
-    if (!justCreated || title.value.trim() || desc.textContent.trim() || desc.querySelector('img, hr, li')) return;
+  // Задача без названия не остаётся (как заметки): сервер даёт название из первой строки описания,
+  // а без текста удаляет насовсем. Несохранённое описание уходит тем же запросом.
+  const finalizeTask = async () => {
+    saveTitle.cancel();
+    saveDesc.cancel();
     if (!S.tasks.includes(t)) return;
-    S.tasks = S.tasks.filter((x) => x !== t);
-    refreshTasks();
-    try { await api('DELETE', `/api/tasks/${t.id}`); } catch (e) { fail(e); }
+    const body = descDirty ? { description: serializeEditor(desc) } : {};
+    descDirty = false;
+    const hasText = !!desc.textContent.trim();
+    if (!hasText) { S.tasks = S.tasks.filter((x) => x !== t); refreshTasks(); updateCounts(); }
+    try {
+      const r = await api('POST', `/api/tasks/${t.id}/finalize`, body);
+      if (r.deleted) {
+        if (S.tasks.includes(t)) { S.tasks = S.tasks.filter((x) => x !== t); refreshTasks(); updateCounts(); }
+      } else if (r.title) {
+        if (body.description !== undefined) t.description = body.description;
+        t.title = r.title;
+        refreshTasks();
+      }
+    } catch (e) { fail(e); }
+  };
+  // Закрытие вкладки с открытой карточкой: один keepalive-запрос (название из описания или сохранение описания)
+  panel.unloadFn = () => {
+    if (!S.tasks.includes(t)) return;
+    const body = descDirty ? { description: serializeEditor(desc) } : {};
+    const v = title.value.trim();
+    if (v && v !== t.title) body.title = v;
+    if (!v && !t.title.trim()) sendNow('POST', `/api/tasks/${t.id}/finalize`, body);
+    else if (Object.keys(body).length) sendNow('PATCH', `/api/tasks/${t.id}`, body);
   };
   // Перед завершением или удалением дожидаемся сохранения, чтобы не потерять последние правки
   const saveAll = async () => {
@@ -2108,16 +2136,15 @@ function openTaskPanel(id, { justCreated = false } = {}) {
       await setCompleted([t.id], false);
       openTaskPanel(t.id);
     } else {
-      close();
-      setCompleted([t.id], true);
+      await close();
+      if (S.tasks.includes(t)) setCompleted([t.id], true);
     }
   };
   // Удаление — в «Недавно удалённые», без подтверждения; в уведомлении «Отменить»
   $('#tp-delete', panel).onclick = async () => {
     await saveAll();
-    justCreated = false;
-    close();
-    deleteTasks([t.id]);
+    await close();
+    if (S.tasks.includes(t)) deleteTasks([t.id]);
   };
   // Только что созданная задача — курсор сразу в название
   if (justCreated || !t.description) setTimeout(() => title.focus(), 50);
