@@ -747,3 +747,46 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
 .outline-row .toc-title .tt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .outline-row .toc-title > svg.i, .outline-row .kids-n { flex: none; }
 .outline.selecting .outline-row:not(.depth-0) { background-position: 40px 0; }
+
+/* ---------- Задачи в стиле главной «Заметок» ---------- */
+.tasks-wrap { max-width: 860px; gap: 22px; }
+.tasks-wrap.wide { max-width: 1180px; }
+.tasks-head .home-title { flex: 1; }
+.tasks-head .home-title h1 { flex: none; }
+#tasks-body { display: grid; gap: 26px; }
+
+/* Фильтры: выбранный — как активный пункт в левой панели */
+.chip { background: none; transition: background-color .15s, color .15s, border-color .15s; }
+.chip:hover { background: var(--hover); color: var(--fg); }
+.chip.on, .chip.on:hover { background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 500; }
+
+/* Группы списка: подписи как «Все заметки», строки — одним блоком с разделителями */
+.task-group { gap: 10px; }
+.task-group > h3 { margin: 0; min-height: 30px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+.task-group > h3 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.task-group > h3 .kids-n, .column-head .kids-n { margin-left: 2px; letter-spacing: 0; text-transform: none; }
+.task-list { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.task-list .task-row {
+  border: 0; border-radius: 0; background: none; padding: 11px 14px; gap: 12px;
+  transition: background-color .15s;
+}
+.task-list .task-row + .task-row { margin-top: 0; border-top: 1px solid var(--line); }
+.task-list .task-row:hover { background-color: var(--hover); }
+.task-list .task-row:hover .t-title { color: var(--accent); }
+.task-list .task-row.done:hover .t-title { color: var(--faint); }
+.task-row .t-title { font-weight: 500; font-size: 15px; }
+.task-row .t-meta { font-size: 12.5px; color: var(--faint); }
+.task-row .t-title .mini-star, .card .c-title .mini-star { color: var(--warn); }
+
+/* Доска: колонки и карточки как «Недавно изменённые» */
+.column { background: color-mix(in srgb, var(--surface) 45%, var(--bg)); border-radius: 12px; }
+.column-head { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); padding: 4px 4px 2px; min-height: 28px; }
+.column-head .kids-n { margin-left: 0; }
+.column-head .col-edit { margin-left: auto; }
+.card { border-radius: 10px; padding: 12px 14px; transition: border-color .15s, background-color .15s; }
+.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: var(--hover); }
+.card .c-title { font-weight: 600; font-size: 14.5px; line-height: 1.35; }
+.card:hover .c-title { color: var(--accent); }
+.card.done .c-title, .card.done:hover .c-title { color: var(--faint); }
+.card .t-meta { font-size: 12.5px; color: var(--faint); }
+@media (max-width: 600px) { .tasks-wrap .tasks-head .home-title { flex: 1 1 100%; } }

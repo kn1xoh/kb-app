@@ -1237,9 +1237,12 @@ function renderTasks() {
   renderTree();
   $('#main').innerHTML = `
     ${topbar('', 'bare')}
-    <div class="tasks-wrap">
-      <div class="tasks-head">
-        <h1>Задачи</h1>
+    <div class="tasks-wrap ${S.taskView === 'board' ? 'wide' : ''}">
+      <div class="tasks-head home-head">
+        <div class="home-title">
+          <h1>Задачи</h1>
+          <p class="home-sub" id="tasks-sub"></p>
+        </div>
         <button class="btn ghost" id="edit-statuses" title="Добавить, переименовать или перекрасить статусы">${icon('palette')}Статусы</button>
         <div class="segmented" role="tablist">
           <button data-view="list" class="${S.taskView === 'list' ? 'on' : ''}">${icon('list')}Список</button>
@@ -1257,6 +1260,7 @@ function renderTasks() {
     S.taskView = b.dataset.view;
     store.set('kb-task-view', S.taskView);
     $$('[data-view]').forEach((x) => x.classList.toggle('on', x === b));
+    $('.tasks-wrap').classList.toggle('wide', S.taskView === 'board');
     renderTasksBody();
   });
   $('#edit-statuses').onclick = () => openStatusesDialog();
@@ -1281,6 +1285,10 @@ function renderTasks() {
 function renderTasksBody() {
   const body = $('#tasks-body');
   if (!body) return;
+  const total = S.tasks.length;
+  const doneN = S.tasks.filter((t) => t.status === 'done').length;
+  $('#tasks-sub').textContent = total
+    ? `${total} ${plural(total, 'задача', 'задачи', 'задач')}${doneN ? ` · ${doneN} ${plural(doneN, 'выполнена', 'выполнены', 'выполнено')}` : ''}` : '';
   $('#filters').innerHTML = FILTERS.map((f) => {
     const n = S.tasks.filter(f.test).length;
     return `<button class="chip ${S.taskFilter === f.id ? 'on' : ''}" data-filter="${f.id}">${f.title}<span class="n">${n}</span></button>`;
@@ -1300,7 +1308,7 @@ function renderTasksBody() {
     body.innerHTML = `<div class="board" style="--cols:${S.statuses.length}">${S.statuses.map(({ key: s }) => {
       const items = byStatus(s);
       return `<section class="column" data-status="${s}">
-        <div class="column-head"><span class="dot" style="background:${statusColor(s)}"></span><span class="col-name">${esc(statusOf(s).name)}</span><span class="n">${items.length}</span>
+        <div class="column-head"><span class="dot" style="background:${statusColor(s)}"></span><span class="col-name">${esc(statusOf(s).name)}</span><span class="kids-n">${items.length}</span>
           <button class="icon-btn col-edit" data-edit-status="${s}" title="Изменить статус" aria-label="Изменить статус">${icon('pencil')}</button></div>
         ${items.map(taskCard).join('') || '<div class="col-empty">Перетащите сюда задачу</div>'}
         <button class="add-inline" data-add="${s}">${icon('plus')}Добавить</button>
@@ -1316,8 +1324,8 @@ function renderTasksBody() {
     const groups = order.map((s) => ({ s, items: byStatus(s) })).filter((g) => g.items.length);
     body.innerHTML = groups.length ? groups.map((g) => `
       <section class="task-group">
-        <h3><span class="dot" style="width:8px;height:8px;border-radius:50%;background:${statusColor(g.s)}"></span>${esc(statusOf(g.s).name)}<span class="n">${g.items.length}</span></h3>
-        ${g.items.map(taskRow).join('')}
+        <h3><span class="dot" style="background:${statusColor(g.s)}"></span>${esc(statusOf(g.s).name)}<span class="kids-n">${g.items.length}</span></h3>
+        <div class="task-list">${g.items.map(taskRow).join('')}</div>
       </section>`).join('') : '<p class="muted">Под этот фильтр задач нет.</p>';
   }
 }
