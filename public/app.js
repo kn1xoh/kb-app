@@ -87,6 +87,25 @@ function dueLabel(d) {
   return new Date(d + 'T00:00').toLocaleDateString('ru-RU', opts).replace('.', '');
 }
 
+// «1 октября 2026, 14:30» — по местному времени (в базе время хранится в UTC)
+function fullDateTime(s) {
+  const d = toDate(s);
+  const date = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).replace(' г.', '');
+  return `${date}, ${d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`;
+}
+// «Сегодня, 1 окт» / «пт, 9 окт» / «пт, 9 окт 2027»
+function dueLong(d) {
+  const dt = new Date(d + 'T00:00');
+  const opts = { day: 'numeric', month: 'short' };
+  if (d.slice(0, 4) !== todayStr().slice(0, 4)) opts.year = 'numeric';
+  const date = dt.toLocaleDateString('ru-RU', opts).replace('.', '').replace(' г.', '');
+  const rel = dueLabel(d);
+  if (['сегодня', 'завтра', 'вчера'].includes(rel)) return `${rel[0].toUpperCase()}${rel.slice(1)}, ${date}`;
+  return `${dt.toLocaleDateString('ru-RU', { weekday: 'short' })}, ${date}`;
+}
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+
 async function api(method, url, body) {
   const res = await fetch(url, {
     method,
@@ -1390,7 +1409,7 @@ function openTaskPanel(id) {
   panel.setAttribute('aria-label', 'Задача');
   panel.innerHTML = `
     <div class="panel-head">
-      <span class="muted">Создана ${ago(t.created_at)}</span>
+      <span class="muted">Задача</span>
       <button class="icon-btn fav-btn" id="tp-fav" data-id="${t.id}"></button>
       <button class="icon-btn" id="tp-delete" title="Удалить задачу" aria-label="Удалить задачу">${icon('trash')}</button>
       <button class="icon-btn" id="tp-close" title="Закрыть (Esc)" aria-label="Закрыть">${icon('x')}</button>
@@ -1403,7 +1422,9 @@ function openTaskPanel(id) {
         <span>Приоритет</span>
         <select id="tp-prio">${Object.entries(PRIORITY).map(([k, v]) => `<option value="${k}" ${t.priority === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
         <span>Срок</span>
-        <input type="date" id="tp-due" value="${t.due_date || ''}">
+        <button type="button" class="date-btn" id="tp-due"></button>
+        <span>Создана</span>
+        <span class="prop-text" title="${esc(ago(t.created_at))}">${esc(fullDateTime(t.created_at))}</span>
       </div>
       <div>
         <div id="tp-toolbar"></div>
@@ -1427,9 +1448,20 @@ function openTaskPanel(id) {
   const saveTitle = debounce(() => { if (title.value.trim()) updateTask(t, { title: title.value.trim() }); }, 500);
   title.oninput = () => { grow(); saveTitle(); };
   title.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } };
-  $('#tp-status', panel).onchange = (e) => updateTask(t, { status: e.target.value });
+  $('#tp-status', panel).onchange = async (e) => { await updateTask(t, { status: e.target.value }); paintDue(); };
   $('#tp-prio', panel).onchange = (e) => updateTask(t, { priority: e.target.value });
-  $('#tp-due', panel).onchange = (e) => updateTask(t, { due_date: e.target.value || null });
+  const dueBtn = $('#tp-due', panel);
+  const paintDue = () => {
+    const overdue = t.due_date && t.status !== 'done' && t.due_date < todayStr();
+    dueBtn.className = `date-btn ${t.due_date ? '' : 'no-date'} ${overdue ? 'overdue' : ''}`;
+    dueBtn.innerHTML = `${icon('calendar')}<span>${t.due_date ? dueLong(t.due_date) : 'Без срока'}</span>`;
+  };
+  paintDue();
+  dueBtn.onclick = () => openDatePicker(dueBtn, t.due_date, async (v) => {
+    if (v === (t.due_date || null)) return;
+    await updateTask(t, { due_date: v });
+    paintDue();
+  });
 
   const desc = $('#tp-desc', panel);
   let descDirty = false;
@@ -1565,7 +1597,106 @@ function showMenu(anchor, html, onPick) {
   $('button', menu)?.focus();
   return menu;
 }
-function closeMenus() { $$('.menu').forEach((m) => m.remove()); }
+function closeMenus() { $$('.menu').forEach((m) => (m.cleanup ? m.cleanup() : m.remove())); }
+// Свой выбор даты: быстрые варианты + календарь. onPick получает 'ГГГГ-ММ-ДД' или null (без срока)
+const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+function openDatePicker(anchor, value, onPick) {
+  closeMenus();
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const tStr = ymd(today);
+  const dow = (today.getDay() + 6) % 7; // 0 = понедельник
+  const quick = [
+    ['Сегодня', today],
+    ['Завтра', addDays(today, 1)],
+    ['В понедельник', addDays(today, 7 - dow)],
+    ['Через неделю', addDays(today, 7)],
+  ];
+  const base = value ? new Date(value + 'T00:00') : today;
+  let year = base.getFullYear(), month = base.getMonth();
+  let focusDay = value || tStr;
+
+  const box = document.createElement('div');
+  box.className = 'menu datepicker';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-label', 'Выбор срока');
+  document.body.append(box);
+
+  const done = (v) => { cleanup(); onPick(v); };
+  function render() {
+    const first = new Date(year, month, 1);
+    const start = addDays(first, -((first.getDay() + 6) % 7));
+    let cells = '';
+    for (let i = 0; i < 42; i++) {
+      const d = addDays(start, i);
+      const k = ymd(d);
+      const cls = [d.getMonth() !== month && 'out', k === tStr && 'today', k === value && 'sel', i % 7 > 4 && 'we'].filter(Boolean).join(' ');
+      cells += `<button type="button" class="dp-day ${cls}" data-d="${k}" tabindex="${k === focusDay ? 0 : -1}" aria-label="${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}">${d.getDate()}</button>`;
+    }
+    box.innerHTML = `
+      <div class="dp-quick">${quick.map(([l, d]) => `<button type="button" data-d="${ymd(d)}" class="${ymd(d) === value ? 'on' : ''}"><span>${l}</span><small>${d.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short' }).replace('.', '')}</small></button>`).join('')}</div>
+      <div class="dp-head">
+        <button type="button" class="icon-btn dp-nav" data-nav="-1" aria-label="Предыдущий месяц">${icon('chevron', 'flip')}</button>
+        <span class="dp-title">${MONTHS[month]} ${year}</span>
+        <button type="button" class="icon-btn dp-nav" data-nav="1" aria-label="Следующий месяц">${icon('chevron')}</button>
+      </div>
+      <div class="dp-grid">${['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((w) => `<span class="dp-wd">${w}</span>`).join('')}${cells}</div>
+      ${value ? '<button type="button" class="dp-clear" data-clear>' + icon('x') + 'Убрать срок</button>' : ''}`;
+  }
+  function place() {
+    const r = anchor.getBoundingClientRect();
+    const w = box.offsetWidth, h = box.offsetHeight;
+    let top = r.bottom + 4;
+    if (top + h > innerHeight - 8) top = Math.max(8, r.top - h - 4);
+    box.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px';
+    box.style.top = top + 'px';
+  }
+  const focusCell = () => $(`.dp-day[data-d="${focusDay}"]`, box)?.focus();
+  function moveFocus(n) {
+    const d = addDays(new Date(focusDay + 'T00:00'), n);
+    focusDay = ymd(d);
+    if (d.getMonth() !== month || d.getFullYear() !== year) { year = d.getFullYear(); month = d.getMonth(); render(); }
+    else $$('.dp-day', box).forEach((b) => { b.tabIndex = b.dataset.d === focusDay ? 0 : -1; });
+    focusCell();
+  }
+
+  box.addEventListener('click', (e) => {
+    const nav = e.target.closest('[data-nav]');
+    if (nav) {
+      month += Number(nav.dataset.nav);
+      if (month < 0) { month = 11; year--; }
+      if (month > 11) { month = 0; year++; }
+      render();
+      $(`[data-nav="${nav.dataset.nav}"]`, box).focus();
+      return;
+    }
+    if (e.target.closest('[data-clear]')) return done(null);
+    const day = e.target.closest('[data-d]');
+    if (day) done(day.dataset.d);
+  });
+  box.addEventListener('keydown', (e) => {
+    if (!e.target.classList.contains('dp-day')) return;
+    const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
+    if (step) { e.preventDefault(); moveFocus(step); }
+  });
+  // Esc закрывает только календарь, а не всю карточку задачи
+  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); cleanup(); anchor.focus(); } };
+  const outside = (e) => { if (!box.contains(e.target) && !anchor.contains(e.target)) cleanup(); };
+  function cleanup() {
+    box.remove();
+    window.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('mousedown', outside);
+    window.removeEventListener('resize', cleanup);
+  }
+  box.cleanup = cleanup;
+  window.addEventListener('keydown', onKey, true);
+  setTimeout(() => document.addEventListener('mousedown', outside), 0);
+  window.addEventListener('resize', cleanup);
+
+  render();
+  place();
+  focusCell();
+}
+
 
 function openUserMenu(anchor) {
   const cur = themeChoice();
