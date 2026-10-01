@@ -403,8 +403,8 @@ app.get('/api/tasks', auth, (req, res) => {
 
 app.post('/api/tasks', auth, (req, res) => {
   const b = req.body || {};
+  // Название можно ввести уже в открытой карточке, поэтому задача создаётся и без него
   const title = String(b.title || '').trim().slice(0, 300);
-  if (!title) return httpError(res, 400, 'Напишите название задачи');
   const status = b.status && statusExists(req.user.id, b.status) ? b.status : defaultStatus(req.user.id);
   const priority = PRIORITIES.includes(b.priority) ? b.priority : 'medium';
   const due = validDate(b.due_date) && b.due_date ? b.due_date : null;

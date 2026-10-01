@@ -263,12 +263,25 @@ function renderShell() {
       </aside>
       <div class="scrim" id="scrim"></div>
       <main class="main" id="main"></main>
+      <button class="fab" id="fab" hidden></button>
     </div>`;
   renderTree();
   updateCounts();
   $('#open-search').onclick = openSearch;
   $('#user-btn').onclick = (e) => openUserMenu(e.currentTarget);
   $('#scrim').onclick = closeNav;
+  $('#fab').onclick = () => (S.section === 'tasks' ? createTask() : createPage(null));
+}
+
+// Кнопка «+» на телефоне: видна в любом месте раздела Заметки или Задачи
+function updateFab() {
+  const fab = $('#fab');
+  if (!fab) return;
+  const label = S.section === 'tasks' ? 'Новая задача' : 'Новая заметка';
+  fab.innerHTML = icon('plus');
+  fab.setAttribute('aria-label', label);
+  fab.title = label;
+  fab.hidden = S.section === 'notes' && S.selectMode;
 }
 
 function closeNav() { $('#shell')?.classList.remove('nav-open'); }
@@ -285,6 +298,7 @@ function updateCounts() {
 function setActiveNav(section) {
   S.section = section;
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.section === section));
+  updateFab();
 }
 
 document.addEventListener('click', (e) => {
@@ -352,7 +366,7 @@ function renderTree() {
     box.innerHTML = favs.map((t) => `
       <div class="fav-row ${t.status === 'done' ? 'done' : ''}" data-fav-task="${t.id}" role="button" tabindex="0">
         <span class="fav-dot" style="background:${statusColor(t.status)}" title="${esc(statusOf(t.status).name)}"></span>
-        <span class="fav-title">${esc(t.title)}</span>${unfav}
+        <span class="fav-title">${esc(taskTitle(t))}</span>${unfav}
       </div>`).join('')
       || `<div class="tree-empty">Откройте задачу и нажмите ${icon('star', 'inline-star')} — она появится здесь.</div>`;
   } else {
@@ -657,6 +671,7 @@ function renderNotesHome() {
       ${trashSection()}
     </div>`;
   $('#home-new').onclick = () => createPage(null);
+  updateFab();
   bindTrash();
   if (S.trash === null) loadTrash();
   const outline = $('#outline');
@@ -1546,11 +1561,8 @@ function renderTasks() {
           <button data-view="list" class="${S.taskView === 'list' ? 'on' : ''}">${icon('list')}Список</button>
           <button data-view="board" class="${S.taskView === 'board' ? 'on' : ''}">${icon('board')}Доска</button>
         </div>
+        <button class="btn primary head-new" id="task-new">${icon('plus')}Новая задача</button>
       </div>
-      <form class="quick-add" id="quick-add">
-        <input class="input" id="qa-title" placeholder="Новая задача — напишите и нажмите Enter" maxlength="300" autocomplete="off">
-        <button class="btn primary">${icon('plus')}Добавить</button>
-      </form>
       <div class="filters" id="filters"></div>
       <div id="tasks-body"></div>
     </div>`;
@@ -1562,24 +1574,30 @@ function renderTasks() {
     renderTasksBody();
   });
   $('#edit-statuses').onclick = () => openStatusesDialog();
-  $('#quick-add').onsubmit = async (e) => {
-    e.preventDefault();
-    const input = $('#qa-title');
-    const title = input.value.trim();
-    if (!title) return input.focus();
-    const extra = S.taskFilter === 'today' || S.taskFilter === 'overdue' ? { due_date: todayStr() }
-      : S.taskFilter === 'high' ? { priority: 'high' } : {};
-    try {
-      const t = await api('POST', '/api/tasks', { title, ...extra });
-      S.tasks.push(t);
-      input.value = '';
-      renderTasksBody();
-      updateCounts();
-      openTaskPanel(t.id, { justCreated: true });
-    } catch (err) { fail(err); }
-  };
+  $('#task-new').onclick = createTask;
   renderTasksBody();
 }
+
+// Новая задача создаётся пустой и сразу открывается — название пишется в карточке
+let creatingTask = false;
+async function createTask() {
+  if (creatingTask) return;
+  creatingTask = true;
+  const extra = S.taskFilter === 'today' || S.taskFilter === 'overdue' ? { due_date: todayStr() }
+    : S.taskFilter === 'high' ? { priority: 'high' } : {};
+  try {
+    const t = await api('POST', '/api/tasks', { title: '', ...extra });
+    S.tasks.push(t);
+    if (!location.hash.startsWith('#/tasks')) {
+      location.hash = '#/tasks';
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    renderTasksBody();
+    updateCounts();
+    openTaskPanel(t.id, { justCreated: true });
+  } catch (err) { fail(err); } finally { creatingTask = false; }
+}
+const taskTitle = (t) => t.title.trim() || 'Без названия';
 
 function renderTasksBody() {
   const body = $('#tasks-body');
@@ -1599,7 +1617,7 @@ function renderTasksBody() {
   const byStatus = (s) => list.filter((t) => t.status === s).sort((a, b) => a.position - b.position || b.id - a.id);
 
   if (!S.tasks.length) {
-    body.innerHTML = `<div class="empty" style="margin-top:6vh"><h2>Задач пока нет</h2><p>Напишите первую задачу в поле выше и нажмите Enter.</p></div>`;
+    body.innerHTML = `<div class="empty" style="margin-top:6vh"><h2>Задач пока нет</h2><p>Нажмите «Новая задача», чтобы добавить первую.</p></div>`;
     return;
   }
 
@@ -1641,8 +1659,8 @@ function checkBtn(t) {
   return `<button class="check ${cls}" data-check="${t.id}" aria-label="${t.status === 'done' ? 'Вернуть в работу' : 'Отметить выполненной'}">${icon('check')}</button>`;
 }
 const favMark = (t) => (t.favorite_at ? icon('star', 'filled mini-star') : '');
-const taskRow = (t) => `<div class="task-row ${t.status === 'done' ? 'done' : ''}" data-task="${t.id}">${checkBtn(t)}<span class="t-title">${esc(t.title)}${favMark(t)}</span>${taskMeta(t)}</div>`;
-const taskCard = (t) => `<div class="card ${t.status === 'done' ? 'done' : ''}" draggable="true" data-task="${t.id}"><div class="c-title">${esc(t.title)}${favMark(t)}</div>${t.due_date || t.priority !== 'medium' ? taskMeta(t) : ''}</div>`;
+const taskRow = (t) => `<div class="task-row ${t.status === 'done' ? 'done' : ''}" data-task="${t.id}">${checkBtn(t)}<span class="t-title ${t.title.trim() ? '' : 'untitled'}">${esc(taskTitle(t))}${favMark(t)}</span>${taskMeta(t)}</div>`;
+const taskCard = (t) => `<div class="card ${t.status === 'done' ? 'done' : ''}" draggable="true" data-task="${t.id}"><div class="c-title ${t.title.trim() ? '' : 'untitled'}">${esc(taskTitle(t))}${favMark(t)}</div>${t.due_date || t.priority !== 'medium' ? taskMeta(t) : ''}</div>`;
 
 $('#app').addEventListener('click', async (e) => {
   const chk = e.target.closest('[data-check]');
@@ -1753,7 +1771,20 @@ function openTaskPanel(id, { justCreated = false } = {}) {
       </div>
     </div>`;
   document.body.append(ov, panel);
-  const close = () => { saveDesc.flush(); ov.remove(); panel.remove(); document.removeEventListener('keydown', onKey); };
+  const close = () => {
+    saveTitleNow();
+    saveDesc.flush();
+    ov.remove(); panel.remove(); document.removeEventListener('keydown', onKey);
+    dropIfEmpty();
+  };
+  // Новую задачу закрыли, ничего не написав, — не оставляем пустышку
+  const dropIfEmpty = async () => {
+    if (!justCreated || title.value.trim() || desc.textContent.trim() || desc.querySelector('img, hr, li')) return;
+    if (!S.tasks.includes(t)) return;
+    S.tasks = S.tasks.filter((x) => x !== t);
+    renderTasksBody(); renderTree(); updateCounts();
+    try { await api('DELETE', `/api/tasks/${t.id}`); } catch (e) { fail(e); }
+  };
   const onKey = (e) => { if (e.key === 'Escape' && !$('.modal')) close(); };
   document.addEventListener('keydown', onKey);
   ov.onclick = close;
@@ -1766,9 +1797,15 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   const title = $('#tp-title', panel);
   const grow = () => { title.style.height = 'auto'; title.style.height = title.scrollHeight + 'px'; };
   grow();
-  const saveTitle = debounce(() => { if (title.value.trim()) updateTask(t, { title: title.value.trim() }); }, 500);
+  const saveTitleNow = () => {
+    saveTitle.cancel();
+    const v = title.value.trim();
+    if (v && v !== t.title && S.tasks.includes(t)) updateTask(t, { title: v });
+  };
+  const saveTitle = debounce(saveTitleNow, 500);
   title.oninput = () => { grow(); saveTitle(); };
-  title.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } };
+  // Enter в названии — переход к описанию
+  title.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); saveTitleNow(); desc.focus(); } };
   $('#tp-status', panel).onchange = async (e) => { await updateTask(t, { status: e.target.value }); paintDue(); };
   $('#tp-prio', panel).onchange = (e) => updateTask(t, { priority: e.target.value });
   const dueBtn = $('#tp-due', panel);
@@ -1796,7 +1833,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   $('#tp-toolbar', panel).replaceWith(makeEditor(desc, () => { descDirty = true; saveDesc(); }));
 
   $('#tp-delete', panel).onclick = async () => {
-    const ok = await confirmDialog({ title: 'Удалить задачу?', text: `«${t.title}» будет удалена без возможности восстановления.`, okText: 'Удалить', danger: true });
+    const ok = await confirmDialog({ title: 'Удалить задачу?', text: `«${taskTitle(t)}» будет удалена без возможности восстановления.`, okText: 'Удалить', danger: true });
     if (!ok) return;
     try {
       await api('DELETE', `/api/tasks/${t.id}`);
@@ -1809,9 +1846,8 @@ function openTaskPanel(id, { justCreated = false } = {}) {
       toast('Задача удалена');
     } catch (e) { fail(e); }
   };
-  // Только что созданная задача: название уже написано — сразу ставим курсор в описание
-  if (justCreated) setTimeout(() => desc.focus(), 50);
-  else if (!t.description) setTimeout(() => title.focus(), 50);
+  // Только что созданная задача — курсор сразу в название
+  if (justCreated || !t.description) setTimeout(() => title.focus(), 50);
 }
 
 /* =========================================================
@@ -1845,7 +1881,7 @@ function openSearch() {
     if (data.tasks.length) {
       html += '<h4>Задачи</h4>' + data.tasks.map((t) => {
         items.push({ task: t.id });
-        return `<div class="result" data-i="${items.length - 1}">${icon('tasks')}<b>${hl(t.title, q)}</b><small>${esc(statusOf(t.status).name)}${t.snippet ? ' · ' + hl(t.snippet, q) : ''}</small></div>`;
+        return `<div class="result" data-i="${items.length - 1}">${icon('tasks')}<b>${hl(taskTitle(t), q)}</b><small>${esc(statusOf(t.status).name)}${t.snippet ? ' · ' + hl(t.snippet, q) : ''}</small></div>`;
       }).join('');
     }
     results.innerHTML = html || `<div class="palette-empty">${q ? 'Ничего не найдено' : 'Начните вводить запрос'}</div>`;

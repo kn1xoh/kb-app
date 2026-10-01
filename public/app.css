@@ -271,8 +271,6 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .segmented { display: inline-flex; padding: 3px; background: var(--sidebar); border: 1px solid var(--line); border-radius: 9px; }
 .segmented button { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: none; color: var(--muted); font-weight: 500; font-size: 14px; }
 .segmented button.on { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
-.quick-add { display: flex; gap: 8px; }
-.quick-add .input { flex: 1; min-width: 0; }
 .filters { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { height: 30px; padding: 0 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); font-size: 14px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
 .chip.on { background: var(--fg); border-color: var(--fg); color: var(--bg); }
@@ -859,4 +857,25 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
 /* узкий экран: панель форматирования ровно в две строки — «текст» на первой, блоки на второй */
 @media (max-width: 600px) {
   .toolbar .sep:nth-of-type(2) { flex: 0 0 100%; height: 0; margin: 0; }
+}
+
+/* ---------- Создание: кнопка в шапке на компьютере, плавающая «+» на телефоне ---------- */
+.t-title.untitled, .c-title.untitled { color: var(--faint); font-style: italic; }
+.fab { display: none; }
+@media (max-width: 860px) {
+  .home-head #home-new, .home-head #task-new { display: none; }
+  .fab:not([hidden]) {
+    position: fixed; z-index: 20; right: 16px; bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; background: var(--accent); color: var(--accent-fg);
+    box-shadow: 0 6px 18px rgb(10 16 13 / .22), 0 1px 3px rgb(10 16 13 / .18);
+    -webkit-tap-highlight-color: transparent; transition: transform .12s, filter .12s;
+  }
+  .fab:active { transform: scale(.94); }
+  .fab svg.i { width: 24px; height: 24px; stroke-width: 2.2; }
+  .fab { width: 56px; height: 56px; border-radius: 50%; }
+  /* Пока печатаешь — кнопка не мешает */
+  .shell:has(.editor:focus, .page-title:focus, input:focus) .fab { display: none; }
+  body:has(.fab:not([hidden])) #toasts { bottom: calc(86px + env(safe-area-inset-bottom, 0px)); }
+  .notes-home, .tasks-wrap { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
 }
