@@ -794,3 +794,69 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
 .card.done .c-title, .card.done:hover .c-title { color: var(--faint); }
 .card .t-meta { font-size: 12.5px; color: var(--faint); }
 @media (max-width: 600px) { .tasks-wrap .tasks-head .home-title { flex: 1 1 100%; } }
+
+/* ---------- телефон и сенсорные экраны: кнопки под палец, вид остаётся компактным ---------- */
+@media (max-width: 860px), (pointer: coarse) {
+  :root { --tap: 40px; }
+  .icon-btn { width: var(--tap); height: var(--tap); border-radius: 8px; }
+  .icon-btn svg.i { width: 20px; height: 20px; }
+  .btn { height: var(--tap); }
+
+  /* панель форматирования */
+  .toolbar { gap: 2px; }
+  .toolbar .icon-btn { width: auto; height: var(--tap); flex: 1 0 34px; max-width: var(--tap); }
+  .toolbar .icon-btn svg.i { width: 19px; height: 19px; }
+  .tb-block { height: var(--tap); font-size: 15px; }
+  .toolbar .sep { height: 22px; margin: 0 2px; }
+  .editor ul.checklist li { padding-left: 32px; }
+  .editor ul.checklist li::before { width: 20px; height: 20px; top: .25em; border-radius: 5px; }
+
+  /* верхняя полоса: кнопки крупнее — первая «крошка» не сжимается */
+  .topbar { gap: 4px; }
+  .topbar > .icon-btn:last-child { margin-right: -6px; }
+  .crumbs a:first-child { flex-shrink: 0; }
+
+  /* карточка задачи */
+  .tp-actions { gap: 0; margin: -4px -10px 0 0; }
+  .props select, .props input, .date-btn, .st-default select { height: var(--tap); }
+
+  /* задачи: фильтры, вид, галочка (зона нажатия шире самого кружка) */
+  .segmented button { height: 36px; }
+  .chip { height: 36px; padding: 0 14px; }
+  .check { width: 22px; height: 22px; position: relative; }
+  .check::after { content: ""; position: absolute; inset: -11px; }
+
+  /* заметки: стрелки, «+», выбор */
+  .outline-row { grid-template-columns: 22px auto 1fr auto var(--tap); }
+  .outline-row .twisty, .sel-box { position: relative; }
+  .outline-row .twisty::after, .sel-box::after { content: ""; position: absolute; inset: -9px; }
+  .outline-row .row-add { width: var(--tap); height: var(--tap); margin: -8px -6px -8px 0; }
+  .toc-head .btn, .trash-row .btn { height: 36px; }
+  .outline-tools .btn { height: 36px; }
+
+  /* левая панель */
+  .search-trigger { height: var(--tap); }
+  .nav a { padding: 10px 10px; }
+  .tree-row, .fav-row { height: auto; min-height: var(--tap); }
+  .tree-row .twisty { width: 30px; height: 30px; }
+  .tree-actions .icon-btn, .fav-remove { width: 36px; height: 36px; }
+  .tree-actions svg.i, .fav-remove svg.i { width: 17px; height: 17px; }
+  .user-btn { padding: 8px; }
+
+  /* меню, календарь, статусы */
+  .menu button { padding: 11px 12px; }
+  .menu .seg button { padding: 9px 6px; }
+  .datepicker .dp-nav { width: var(--tap); height: var(--tap); }
+  .datepicker .dp-day { height: 40px; font-size: 14px; }
+  .datepicker .dp-quick button { padding: 8px 10px; }
+  .st-swatch { width: 30px; height: 30px; }
+  .st-color { width: 34px; height: 34px; }
+  .st-name { height: var(--tap); }
+  .st-lock { width: var(--tap); }
+  .toast-action { padding: 8px 4px; margin: -8px -4px; }
+}
+@media (max-width: 560px) { .outline-row { grid-template-columns: 22px auto 1fr var(--tap); } }
+/* узкий экран: панель форматирования ровно в две строки — «текст» на первой, блоки на второй */
+@media (max-width: 600px) {
+  .toolbar .sep:nth-of-type(2) { flex: 0 0 100%; height: 0; margin: 0; }
+}

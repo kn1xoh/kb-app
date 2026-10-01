@@ -1199,7 +1199,7 @@ function makeEditor(editor, onChange) {
       return;
     }
     const li = e.target.closest('ul.checklist > li');
-    if (li && e.target === li && e.clientX - li.getBoundingClientRect().left < 26) {
+    if (li && e.target === li && e.clientX - li.getBoundingClientRect().left < parseFloat(getComputedStyle(li).paddingLeft)) {
       li.setAttribute('data-checked', li.getAttribute('data-checked') === 'true' ? 'false' : 'true');
       changed();
     }
