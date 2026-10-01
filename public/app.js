@@ -161,7 +161,7 @@ const S = {
   taskView: store.get('kb-task-view', 'list'),
   taskFilter: { due: 'all', status: [], prio: [] },
   page: null, // currently open page with content
-  numbering: store.get('kb-numbering', true),
+  numbering: store.get('kb-numbering', false),
   selectMode: false, // bulk selection on the notes home
   selected: new Set(),
   trash: null, // «Недавно удалённые» заметки: { days, items }, null — ещё не загружено
@@ -642,7 +642,10 @@ function renderNotesHome() {
     <div class="notes-home">
       <div class="tasks-head home-head">
         <div class="home-title">
-          <h1>Заметки</h1>
+          <div class="title-row">
+            <h1>Заметки</h1>
+            <button class="icon-btn head-gear" id="notes-settings" title="Настройки заметок" aria-label="Настройки заметок">${icon('gear')}</button>
+          </div>
           ${total ? `<p class="home-sub">${total} ${plural(total, 'заметка', 'заметки', 'заметок')}</p>` : ''}
         </div>
         <button class="btn primary" id="home-new">${icon('plus')}Новая заметка</button>
@@ -681,6 +684,7 @@ function renderNotesHome() {
       ${trashSection()}
     </div>`;
   $('#home-new').onclick = () => createPage(null);
+  $('#notes-settings').onclick = () => openNotesSettings();
   updateFab();
   bindTrash();
   if (S.trash === null) loadTrash();
@@ -2447,7 +2451,6 @@ function openUserMenu(anchor) {
   showMenu(anchor, `
     <div class="menu-label">Тема</div>
     <div class="seg">${seg('system', 'Как в системе')}${seg('light', 'Светлая')}${seg('dark', 'Тёмная')}</div>
-    <button data-m="numbering" data-keep="1">${icon('ol')}Нумерация заметок<span class="menu-state">${S.numbering ? 'вкл' : 'выкл'}</span></button>
     <hr>
     <button data-m="password">${icon('key')}Сменить пароль</button>
     ${S.user.is_admin ? `<button data-m="users">${icon('users')}Пользователи</button>` : ''}
@@ -2456,13 +2459,6 @@ function openUserMenu(anchor) {
     if (m.startsWith('theme-')) {
       applyTheme(m.slice(6));
       $$('.seg button', btn.closest('.menu')).forEach((b) => b.classList.toggle('on', b === btn));
-    }
-    if (m === 'numbering') {
-      S.numbering = !S.numbering;
-      store.set('kb-numbering', S.numbering);
-      $('.menu-state', btn).textContent = S.numbering ? 'вкл' : 'выкл';
-      renderTree();
-      if (S.page) { renderCrumbs(); renderSubpages(); } else if (!location.hash.startsWith('#/tasks')) renderNotesHome();
     }
     if (m === 'password') openPasswordDialog();
     if (m === 'users') openUsersDialog();
@@ -2551,6 +2547,26 @@ function confirmTyped({ title, text, okText = 'Удалить' }) {
 /* =========================================================
    Статусы задач: добавить, переименовать, перекрасить, поменять порядок, удалить
    ========================================================= */
+function openNotesSettings() {
+  const m = openModal(`
+    <h2>Настройки заметок</h2>
+    <h3 class="set-caption">Вид</h3>
+    <label class="set-row">
+      <span class="set-text"><b>Нумерация заметок</b><span>Номера 1, 1.1, 1.1.1 вместо значков в списке и левой панели</span></span>
+      <input type="checkbox" class="switch" id="set-numbering" role="switch" ${S.numbering ? 'checked' : ''}>
+    </label>
+    <div class="modal-actions">
+      <button type="button" class="btn primary" data-close>Готово</button>
+    </div>`, 'settings');
+  $('#set-numbering', m).onchange = (e) => {
+    S.numbering = e.target.checked;
+    store.set('kb-numbering', S.numbering);
+    renderTree();
+    if (S.page) { renderCrumbs(); renderSubpages(); }
+    else if (!location.hash.startsWith('#/tasks')) renderNotesHome();
+  };
+}
+
 function openStatusesDialog({ focus = null } = {}) {
   const m = openModal(`
     <h2>Настройки задач</h2>
