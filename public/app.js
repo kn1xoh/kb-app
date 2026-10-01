@@ -275,6 +275,7 @@ function applyTheme(t) {
   else delete document.documentElement.dataset.theme;
   store.set('kb-theme-choice', t);
   try { if (t === 'system') localStorage.removeItem('kb-theme'); else localStorage.setItem('kb-theme', t); } catch { /* ignore */ }
+  window.syncThemeColor?.();
 }
 const themeChoice = () => store.get('kb-theme-choice', 'system');
 

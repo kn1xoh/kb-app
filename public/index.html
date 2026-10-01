@@ -4,13 +4,31 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Silo</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232E6B57'/%3E%3Cg transform='translate(4 4)' fill='none' stroke='white' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='10' stroke-width='2.6'/%3E%3Cpath d='M17.72 8.7A6.6 6.6 0 1 1 12 5.4' stroke-width='2.4' opacity='.85'/%3E%3Cpath d='M12 15.3A3.3 3.3 0 1 1 15.3 12' stroke-width='2.4' opacity='.6'/%3E%3C/g%3E%3C/svg%3E">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Silo">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#f6f7f6">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&family=Onest:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="/app.css">
   <script>
     try { const t = localStorage.getItem('kb-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+    // Цвет строки состояния / панели браузера — под выбранную тему
+    (function () {
+      const meta = document.querySelector('meta[name="theme-color"]');
+      const dark = matchMedia('(prefers-color-scheme: dark)');
+      window.syncThemeColor = function () {
+        const t = document.documentElement.dataset.theme || (dark.matches ? 'dark' : 'light');
+        meta.content = t === 'dark' ? '#131715' : '#f6f7f6';
+      };
+      syncThemeColor();
+      if (dark.addEventListener) dark.addEventListener('change', syncThemeColor);
+    })();
   </script>
 </head>
 <body>
