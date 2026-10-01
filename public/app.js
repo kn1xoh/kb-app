@@ -1932,7 +1932,8 @@ async function updateTask(t, patch) {
   try {
     Object.assign(t, await api('PATCH', `/api/tasks/${t.id}`, patch));
     renderTasksBody();
-  } catch (e) { fail(e); }
+    return true;
+  } catch (e) { fail(e); return false; }
 }
 
 function setupBoardDnD(root) {
@@ -2004,6 +2005,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
       <div class="tp-head">
         <textarea class="page-title" id="tp-title" rows="1" maxlength="300" placeholder="Название задачи">${esc(t.title)}</textarea>
         <div class="tp-actions">
+          <span class="save-state tp-save" aria-live="polite"></span>
           <button class="icon-btn fav-btn" id="tp-fav" data-id="${t.id}"></button>
           <button class="icon-btn" id="tp-delete" title="Удалить задачу" aria-label="Удалить задачу">${icon('trash')}</button>
           <button class="icon-btn" id="tp-close" title="Закрыть (Esc)" aria-label="Закрыть">${icon('x')}</button>
@@ -2028,6 +2030,22 @@ function openTaskPanel(id, { justCreated = false } = {}) {
       </div>
     </div>`;
   document.body.append(ov, panel);
+  // Индикатор сохранения, как у заметок: «Изменено» → «Сохранение…» → «Сохранено» / «Не сохранено»
+  const saveEl = $('.tp-save', panel);
+  let saving = 0, saveFailed = false;
+  const markDirty = () => { saveEl.textContent = 'Изменено'; };
+  const track = async (run) => {
+    saving++;
+    saveEl.textContent = 'Сохранение…';
+    const ok = await run();
+    if (!ok) saveFailed = true;
+    if (--saving === 0) {
+      saveEl.textContent = saveFailed ? 'Не сохранено' : 'Сохранено';
+      saveFailed = false;
+    }
+    return ok;
+  };
+  const update = (patch) => track(() => updateTask(t, patch));
   let closed = null;
   const close = () => {
     if (closed) return closed;
@@ -2095,15 +2113,15 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   const saveTitleNow = () => {
     saveTitle.cancel();
     const v = title.value.trim();
-    if (v && v !== t.title && S.tasks.includes(t)) updateTask(t, { title: v });
+    if (v && v !== t.title && S.tasks.includes(t)) update({ title: v });
   };
   const saveTitle = debounce(saveTitleNow, 500);
-  title.oninput = () => { grow(); saveTitle(); };
+  title.oninput = () => { grow(); if (title.value.trim()) markDirty(); saveTitle(); };
   // Enter в названии — переход к описанию
   title.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); saveTitleNow(); desc.focus(); } };
   const statusSel = $('#tp-status', panel);
-  if (statusSel) statusSel.onchange = (e) => updateTask(t, { status: e.target.value });
-  $('#tp-prio', panel).onchange = (e) => updateTask(t, { priority: e.target.value });
+  if (statusSel) statusSel.onchange = (e) => update({ status: e.target.value });
+  $('#tp-prio', panel).onchange = (e) => update({ priority: e.target.value });
   const dueBtn = $('#tp-due', panel);
   const paintDue = () => {
     const overdue = t.due_date && !isDone(t) && t.due_date < todayStr();
@@ -2113,7 +2131,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   paintDue();
   dueBtn.onclick = () => openDatePicker(dueBtn, t.due_date, async (v) => {
     if (v === (t.due_date || null)) return;
-    await updateTask(t, { due_date: v });
+    await update({ due_date: v });
     paintDue();
   });
 
@@ -2122,11 +2140,13 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   const saveDescNow = async () => {
     if (!descDirty) return;
     descDirty = false;
-    try { Object.assign(t, await api('PATCH', `/api/tasks/${t.id}`, { description: serializeEditor(desc) })); } catch (e) { fail(e); }
+    await track(async () => {
+      try { Object.assign(t, await api('PATCH', `/api/tasks/${t.id}`, { description: serializeEditor(desc) })); return true; } catch (e) { fail(e); return false; }
+    });
   };
   const saveDesc = debounce(saveDescNow, 700);
   saveDesc.flush = () => { saveDesc.cancel(); saveDescNow(); };
-  $('#tp-toolbar', panel).replaceWith(makeEditor(desc, () => { descDirty = true; saveDesc(); }));
+  $('#tp-toolbar', panel).replaceWith(makeEditor(desc, () => { descDirty = true; markDirty(); saveDesc(); }));
 
   // Завершить — карточка закрывается, в уведомлении «Отменить». Вернуть в работу — карточка остаётся открытой
   $('#tp-complete', panel).onclick = async () => {
