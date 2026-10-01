@@ -1399,6 +1399,10 @@ async function updateTask(t, patch) {
 }
 
 function setupBoardDnD(root) {
+  // #tasks-body не пересоздаётся при перерисовке доски — обработчики вешаем один раз,
+  // иначе после каждого перемещения их становится больше и полоски-вставки множатся
+  if (root.dataset.dnd) return;
+  root.dataset.dnd = '1';
   let dragId = null;
   const ph = document.createElement('div');
   ph.className = 'card-placeholder';
