@@ -1674,7 +1674,7 @@ function taskMeta(t) {
     parts.push(`<span class="due ${cls}">${icon('calendar')}${dueLabel(t.due_date)}</span>`);
   }
   if (t.priority !== 'medium' || t.status !== 'done') parts.push(`<span class="prio ${t.priority}">${PRIORITY[t.priority]}</span>`);
-  return `<span class="t-meta">${parts.join('')}</span>`;
+  return parts.length ? `<span class="t-meta">${parts.join('')}</span>` : '';
 }
 function checkBtn(t) {
   const cls = t.status === 'done' ? 'on' : '';
@@ -1682,7 +1682,7 @@ function checkBtn(t) {
 }
 const favMark = (t) => (t.favorite_at ? icon('star', 'filled mini-star') : '');
 const taskRow = (t) => `<div class="task-row ${t.status === 'done' ? 'done' : ''}" data-task="${t.id}">${checkBtn(t)}<span class="t-title ${t.title.trim() ? '' : 'untitled'}">${esc(taskTitle(t))}${favMark(t)}</span>${taskMeta(t)}</div>`;
-const taskCard = (t) => `<div class="card ${t.status === 'done' ? 'done' : ''}" draggable="true" data-task="${t.id}"><div class="c-title ${t.title.trim() ? '' : 'untitled'}">${esc(taskTitle(t))}${favMark(t)}</div>${t.due_date || t.priority !== 'medium' ? taskMeta(t) : ''}</div>`;
+const taskCard = (t) => `<div class="card ${t.status === 'done' ? 'done' : ''}" draggable="true" data-task="${t.id}"><div class="c-title ${t.title.trim() ? '' : 'untitled'}">${esc(taskTitle(t))}${favMark(t)}</div>${taskMeta(t)}</div>`;
 
 $('#app').addEventListener('click', async (e) => {
   const chk = e.target.closest('[data-check]');
