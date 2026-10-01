@@ -9,11 +9,14 @@ const SECTIONS = [
   { id: 'tasks', title: 'Задачи', icon: 'tasks', hint: 'Список дел и доска' },
 ];
 
-const STATUS = {
-  todo: { title: 'Нужно сделать', color: 'var(--faint)' },
-  in_progress: { title: 'В работе', color: 'var(--warn)' },
-  done: { title: 'Готово', color: 'var(--accent)' },
+// Палитра цветов статусов: ключ хранится на сервере, цвет берётся из CSS-переменной --st-<ключ> (своя для тёмной темы)
+const STATUS_COLORS = {
+  gray: 'Серый', green: 'Зелёный', teal: 'Бирюзовый', blue: 'Синий', indigo: 'Индиго', purple: 'Фиолетовый',
+  pink: 'Розовый', red: 'Красный', orange: 'Оранжевый', yellow: 'Жёлтый', brown: 'Коричневый',
 };
+// Статусы задач пользователя (S.statuses). todo и done — встроенные: новые задачи и «галочка»
+const statusOf = (key) => S.statuses.find((s) => s.key === key) || { key, name: 'Без статуса', color: 'gray' };
+const statusColor = (key) => `var(--st-${statusOf(key).color})`;
 const PRIORITY = { high: 'Высокий', medium: 'Средний', low: 'Низкий' };
 
 // ---------- icons ----------
@@ -45,6 +48,10 @@ const ICONS = {
   clear: 'M5 6V4h13v2M11 4 8 20M6 20h5M15 14l5 5M20 14l-5 5',
   move: 'M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20',
   home: 'M4 11l8-7 8 7M6 9.5V20h12V9.5',
+  pencil: 'M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4',
+  palette: 'M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.8 1.7-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H16a5 5 0 0 0 5-5c0-4-4-7.2-9-7.2zM7.5 11.5h.01M10 7.5h.01M14.5 7.5h.01M17 11h.01',
+  arrowUp: 'M12 19V5M6 11l6-6 6 6',
+  arrowDown: 'M12 5v14M6 13l6 6 6-6',
   star: 'M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.75 1-5.8L3.5 9.7l5.9-.9z',
 };
 const icon = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name]}"/></svg>`;
@@ -115,6 +122,7 @@ const S = {
   user: null,
   pages: [],
   tasks: [],
+  statuses: [],
   expanded: new Set(store.get('kb-expanded', [])),
   taskView: store.get('kb-task-view', 'list'),
   taskFilter: 'all',
@@ -187,7 +195,7 @@ function renderAuth(setup = false) {
 }
 
 async function startApp() {
-  [S.pages, S.tasks] = await Promise.all([api('GET', '/api/pages'), api('GET', '/api/tasks')]);
+  [S.pages, S.tasks, S.statuses] = await Promise.all([api('GET', '/api/pages'), api('GET', '/api/tasks'), api('GET', '/api/statuses')]);
   renderShell();
   if (!location.hash) location.hash = '#/notes';
   else route();
@@ -309,7 +317,7 @@ function renderTree() {
     const favs = S.tasks.filter((t) => t.favorite_at).sort(byAdded);
     box.innerHTML = favs.map((t) => `
       <div class="fav-row ${t.status === 'done' ? 'done' : ''}" data-fav-task="${t.id}" role="button" tabindex="0">
-        <span class="fav-dot" style="background:${STATUS[t.status].color}" title="${STATUS[t.status].title}"></span>
+        <span class="fav-dot" style="background:${statusColor(t.status)}" title="${esc(statusOf(t.status).name)}"></span>
         <span class="fav-title">${esc(t.title)}</span>${unfav}
       </div>`).join('')
       || `<div class="tree-empty">Откройте задачу и нажмите ${icon('star', 'inline-star')} — она появится здесь.</div>`;
@@ -1180,6 +1188,7 @@ function renderTasks() {
     <div class="tasks-wrap">
       <div class="tasks-head">
         <h1>Задачи</h1>
+        <button class="btn ghost" id="edit-statuses" title="Добавить, переименовать или перекрасить статусы">${icon('palette')}Статусы</button>
         <div class="segmented" role="tablist">
           <button data-view="list" class="${S.taskView === 'list' ? 'on' : ''}">${icon('list')}Список</button>
           <button data-view="board" class="${S.taskView === 'board' ? 'on' : ''}">${icon('board')}Доска</button>
@@ -1198,6 +1207,7 @@ function renderTasks() {
     $$('[data-view]').forEach((x) => x.classList.toggle('on', x === b));
     renderTasksBody();
   });
+  $('#edit-statuses').onclick = () => openStatusesDialog();
   $('#quick-add').onsubmit = async (e) => {
     e.preventDefault();
     const input = $('#qa-title');
@@ -1235,21 +1245,26 @@ function renderTasksBody() {
   }
 
   if (S.taskView === 'board') {
-    body.innerHTML = `<div class="board">${Object.keys(STATUS).map((s) => {
+    body.innerHTML = `<div class="board" style="--cols:${S.statuses.length}">${S.statuses.map(({ key: s }) => {
       const items = byStatus(s);
       return `<section class="column" data-status="${s}">
-        <div class="column-head"><span class="dot" style="background:${STATUS[s].color}"></span>${STATUS[s].title}<span class="n">${items.length}</span></div>
+        <div class="column-head"><span class="dot" style="background:${statusColor(s)}"></span><span class="col-name">${esc(statusOf(s).name)}</span><span class="n">${items.length}</span>
+          <button class="icon-btn col-edit" data-edit-status="${s}" title="Изменить статус" aria-label="Изменить статус">${icon('pencil')}</button></div>
         ${items.map(taskCard).join('') || '<div class="col-empty">Перетащите сюда задачу</div>'}
         <button class="add-inline" data-add="${s}">${icon('plus')}Добавить</button>
       </section>`;
-    }).join('')}</div>`;
+    }).join('')}<button class="add-status" data-new-status>${icon('plus')}Статус</button></div>`;
     setupBoardDnD(body);
   } else {
-    const order = ['in_progress', 'todo', 'done'];
+    // В списке сначала задачи в работе (все статусы, кроме встроенных), затем «Нужно сделать», в конце «Готово»
+    const keys = S.statuses.map((x) => x.key);
+    const order = [...keys.filter((k) => k !== 'todo' && k !== 'done'), 'todo', 'done'];
+    // Задачи со статусом, которого уже нет (удалён в другой вкладке), не должны пропасть из списка
+    S.tasks.forEach((t) => { if (!order.includes(t.status)) order.push(t.status); });
     const groups = order.map((s) => ({ s, items: byStatus(s) })).filter((g) => g.items.length);
     body.innerHTML = groups.length ? groups.map((g) => `
       <section class="task-group">
-        <h3><span class="dot" style="width:8px;height:8px;border-radius:50%;background:${STATUS[g.s].color}"></span>${STATUS[g.s].title}<span class="n">${g.items.length}</span></h3>
+        <h3><span class="dot" style="width:8px;height:8px;border-radius:50%;background:${statusColor(g.s)}"></span>${esc(statusOf(g.s).name)}<span class="n">${g.items.length}</span></h3>
         ${g.items.map(taskRow).join('')}
       </section>`).join('') : '<p class="muted">Под этот фильтр задач нет.</p>';
   }
@@ -1265,7 +1280,7 @@ function taskMeta(t) {
   return `<span class="t-meta">${parts.join('')}</span>`;
 }
 function checkBtn(t) {
-  const cls = t.status === 'done' ? 'on' : t.status === 'in_progress' ? 'half' : '';
+  const cls = t.status === 'done' ? 'on' : t.status !== 'todo' ? 'half' : '';
   return `<button class="check ${cls}" data-check="${t.id}" aria-label="${t.status === 'done' ? 'Вернуть в работу' : 'Отметить выполненной'}">${icon('check')}</button>`;
 }
 const favMark = (t) => (t.favorite_at ? icon('star', 'filled mini-star') : '');
@@ -1300,6 +1315,12 @@ $('#app').addEventListener('click', async (e) => {
     };
     input.onblur = () => setTimeout(() => { if (document.contains(form) && !input.value.trim()) renderTasksBody(); }, 150);
     input.onkeydown = (ev) => { if (ev.key === 'Escape') renderTasksBody(); };
+    return;
+  }
+  const editSt = e.target.closest('[data-edit-status], [data-new-status]');
+  if (editSt) {
+    if (editSt.dataset.newStatus !== undefined) openStatusesDialog({ create: true });
+    else openStatusesDialog({ focus: editSt.dataset.editStatus });
     return;
   }
   const row = e.target.closest('[data-task]');
@@ -1384,7 +1405,7 @@ function openTaskPanel(id) {
       <textarea class="page-title" id="tp-title" rows="1" maxlength="300" placeholder="Название задачи">${esc(t.title)}</textarea>
       <div class="props">
         <span>Статус</span>
-        <select id="tp-status">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${v.title}</option>`).join('')}</select>
+        <select id="tp-status">${S.statuses.map((st) => `<option value="${st.key}" ${t.status === st.key ? 'selected' : ''}>${esc(st.name)}</option>`).join('')}</select>
         <span>Приоритет</span>
         <select id="tp-prio">${Object.entries(PRIORITY).map(([k, v]) => `<option value="${k}" ${t.priority === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
         <span>Срок</span>
@@ -1475,7 +1496,7 @@ function openSearch() {
     if (data.tasks.length) {
       html += '<h4>Задачи</h4>' + data.tasks.map((t) => {
         items.push({ task: t.id });
-        return `<div class="result" data-i="${items.length - 1}">${icon('tasks')}<b>${hl(t.title, q)}</b><small>${STATUS[t.status].title}${t.snippet ? ' · ' + hl(t.snippet, q) : ''}</small></div>`;
+        return `<div class="result" data-i="${items.length - 1}">${icon('tasks')}<b>${hl(t.title, q)}</b><small>${esc(statusOf(t.status).name)}${t.snippet ? ' · ' + hl(t.snippet, q) : ''}</small></div>`;
       }).join('');
     }
     results.innerHTML = html || `<div class="palette-empty">${q ? 'Ничего не найдено' : 'Начните вводить запрос'}</div>`;
@@ -1623,6 +1644,141 @@ function confirmDialog({ title, text, okText = 'Ок', danger = false }) {
     $('#ok', m).onclick = () => { done = true; closeModal(m); resolve(true); };
     $('#ok', m).focus();
   });
+}
+
+/* =========================================================
+   Статусы задач: добавить, переименовать, перекрасить, поменять порядок, удалить
+   ========================================================= */
+function openStatusesDialog({ create = false, focus = null } = {}) {
+  const m = openModal(`
+    <h2>Статусы задач</h2>
+    <p>Статусы — это колонки на доске и группы в списке. «${esc(statusOf('todo').name)}» и «${esc(statusOf('done').name)}» нельзя удалить: в первый попадают новые задачи, во второй — отмеченные галочкой. Их можно переименовать и перекрасить.</p>
+    <div class="st-list" id="st-list"></div>
+    <div class="modal-actions st-actions">
+      <button type="button" class="btn" id="st-add">${icon('plus')}Добавить статус</button>
+      <button type="button" class="btn primary" data-close>Готово</button>
+    </div>`, 'statuses');
+  const list = $('#st-list', m);
+  let openPalette = null;
+
+  const refreshOutside = () => { renderTasksBody(); renderTree(); updateCounts(); };
+  const apply = (statuses) => { S.statuses = statuses; draw(); refreshOutside(); };
+
+  function draw() {
+    list.innerHTML = S.statuses.map((st, i) => {
+      const n = S.tasks.filter((t) => t.status === st.key).length;
+      return `<div class="st-item" data-key="${st.key}">
+        <div class="st-row">
+          <button type="button" class="st-swatch" data-swatch style="background:var(--st-${st.color})"
+            title="Выбрать цвет" aria-label="Цвет: ${STATUS_COLORS[st.color] || st.color}. Выбрать другой" aria-expanded="${openPalette === st.key}"></button>
+          <input class="input st-name" value="${esc(st.name)}" maxlength="40" aria-label="Название статуса" autocomplete="off">
+          <span class="st-count" title="Задач в этом статусе">${n || ''}</span>
+          <button type="button" class="icon-btn" data-move="-1" ${i === 0 ? 'disabled' : ''} title="Выше" aria-label="Переместить выше">${icon('arrowUp')}</button>
+          <button type="button" class="icon-btn" data-move="1" ${i === S.statuses.length - 1 ? 'disabled' : ''} title="Ниже" aria-label="Переместить ниже">${icon('arrowDown')}</button>
+          ${st.fixed ? '<span class="st-lock" title="Встроенный статус — удалить нельзя"></span>'
+            : `<button type="button" class="icon-btn" data-remove title="Удалить статус" aria-label="Удалить статус">${icon('trash')}</button>`}
+        </div>
+        ${openPalette === st.key ? `<div class="st-palette" role="group" aria-label="Цвет статуса">${Object.entries(STATUS_COLORS).map(([c, title]) =>
+          `<button type="button" class="st-color ${c === st.color ? 'on' : ''}" data-color="${c}" style="background:var(--st-${c})" title="${title}" aria-label="${title}" aria-pressed="${c === st.color}">${icon('check')}</button>`).join('')}</div>` : ''}
+      </div>`;
+    }).join('');
+    $('#st-add', m).disabled = S.statuses.length >= 12;
+    $('#st-add', m).title = S.statuses.length >= 12 ? 'Статусов может быть не больше 12' : '';
+  }
+
+  const keyOf = (el) => el.closest('[data-key]')?.dataset.key;
+  const focusName = (key, select) => {
+    const input = $(`[data-key="${key}"] .st-name`, m);
+    if (!input) return;
+    input.focus();
+    if (select) input.select();
+  };
+
+  const saveName = async (input) => {
+    const key = keyOf(input);
+    const st = statusOf(key);
+    const name = input.value.replace(/\s+/g, ' ').trim();
+    if (name === st.name) { input.value = st.name; return; }
+    if (!name) { input.value = st.name; toast('Название статуса не может быть пустым', 'error'); return; }
+    try {
+      // Без полной перерисовки, чтобы не сбить фокус, если пользователь уже перешёл к другому полю
+      S.statuses = await api('PATCH', `/api/statuses/${key}`, { name });
+      input.value = statusOf(key).name;
+      refreshOutside();
+    } catch (e) { input.value = st.name; fail(e); }
+  };
+  list.addEventListener('change', (e) => { if (e.target.matches('.st-name')) saveName(e.target); });
+  list.addEventListener('keydown', (e) => {
+    if (!e.target.matches('.st-name')) return;
+    if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+    if (e.key === 'Escape') { e.target.value = statusOf(keyOf(e.target)).name; }
+  });
+
+  list.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const key = keyOf(btn);
+    if (btn.hasAttribute('data-swatch')) {
+      openPalette = openPalette === key ? null : key;
+      draw();
+      $(`[data-key="${key}"] .st-color.on`, m)?.focus();
+      return;
+    }
+    if (btn.dataset.color) {
+      openPalette = null;
+      try { apply(await api('PATCH', `/api/statuses/${key}`, { color: btn.dataset.color })); } catch (err) { fail(err); }
+      $(`[data-key="${key}"] [data-swatch]`, m)?.focus();
+      return;
+    }
+    if (btn.dataset.move) {
+      const keys = S.statuses.map((x) => x.key);
+      const i = keys.indexOf(key);
+      const j = i + Number(btn.dataset.move);
+      if (j < 0 || j >= keys.length) return;
+      [keys[i], keys[j]] = [keys[j], keys[i]];
+      try { apply(await api('POST', '/api/statuses/reorder', { keys })); } catch (err) { fail(err); }
+      $(`[data-key="${key}"] [data-move="${btn.dataset.move}"]:not(:disabled)`, m)?.focus();
+      return;
+    }
+    if (btn.hasAttribute('data-remove')) {
+      const st = statusOf(key);
+      const n = S.tasks.filter((t) => t.status === key).length;
+      if (n) {
+        const ok = await confirmDialog({
+          title: `Удалить статус «${st.name}»?`,
+          text: `${n} ${plural(n, 'задача перейдёт', 'задачи перейдут', 'задач перейдут')} в «${statusOf('todo').name}».`,
+          okText: 'Удалить', danger: true,
+        });
+        if (!ok) return;
+      }
+      try {
+        const statuses = await api('DELETE', `/api/statuses/${key}`);
+        if (n) S.tasks = await api('GET', '/api/tasks');
+        apply(statuses);
+        toast(`Статус «${st.name}» удалён`);
+        $('#st-add', m).focus(); // фокус внутрь окна, чтобы Esc продолжал его закрывать
+      } catch (err) { fail(err); }
+    }
+  });
+
+  const addStatus = async () => {
+    const used = new Set(S.statuses.map((x) => x.color));
+    const color = Object.keys(STATUS_COLORS).find((c) => !used.has(c)) || 'blue';
+    const names = new Set(S.statuses.map((x) => x.name.toLowerCase()));
+    let name = 'Новый статус';
+    for (let i = 2; names.has(name.toLowerCase()); i++) name = `Новый статус ${i}`;
+    const before = new Set(S.statuses.map((x) => x.key));
+    try {
+      apply(await api('POST', '/api/statuses', { name, color }));
+      const added = S.statuses.find((x) => !before.has(x.key));
+      if (added) focusName(added.key, true);
+    } catch (err) { fail(err); }
+  };
+  $('#st-add', m).onclick = addStatus;
+
+  draw();
+  if (create) addStatus();
+  else if (focus) focusName(focus, true);
 }
 
 function genPassword() {

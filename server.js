@@ -368,7 +368,25 @@ app.delete('/api/trash/pages', auth, (req, res) => {
 
 // ---------- tasks ----------
 
-const STATUSES = ['todo', 'in_progress', 'done'];
+// Цвета статусов — ключи палитры; сами цвета заданы в app.css (--st-<ключ>) для светлой и тёмной темы
+const STATUS_COLORS = ['gray', 'green', 'teal', 'blue', 'indigo', 'purple', 'pink', 'red', 'orange', 'yellow', 'brown'];
+const DEFAULT_STATUSES = [['todo', 'Нужно сделать', 'gray'], ['in_progress', 'В работе', 'orange'], ['done', 'Готово', 'green']];
+const FIXED_STATUSES = ['todo', 'done'];
+const MAX_STATUSES = 12;
+
+function listStatuses(userId) {
+  let rows = db.prepare('SELECT key, name, color, position FROM task_statuses WHERE user_id = ? ORDER BY position, id').all(userId);
+  if (!rows.length) {
+    const ins = db.prepare('INSERT OR IGNORE INTO task_statuses (user_id, key, name, color, position) VALUES (?, ?, ?, ?, ?)');
+    db.transaction(() => DEFAULT_STATUSES.forEach(([k, n, c], i) => ins.run(userId, k, n, c, i)))();
+    rows = db.prepare('SELECT key, name, color, position FROM task_statuses WHERE user_id = ? ORDER BY position, id').all(userId);
+  }
+  return rows.map((r) => ({ ...r, fixed: FIXED_STATUSES.includes(r.key) }));
+}
+const statusExists = (userId, key) => listStatuses(userId).some((s) => s.key === key);
+const cleanStatusName = (v) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
+const nameTaken = (userId, name, exceptKey) =>
+  listStatuses(userId).some((s) => s.key !== exceptKey && s.name.toLowerCase() === name.toLowerCase());
 const PRIORITIES = ['low', 'medium', 'high'];
 const getTask = (userId, id) => db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(id, userId);
 const taskOut = (t) => { const { search_text, user_id, ...rest } = t; return rest; };
@@ -382,7 +400,7 @@ app.post('/api/tasks', auth, (req, res) => {
   const b = req.body || {};
   const title = String(b.title || '').trim().slice(0, 300);
   if (!title) return httpError(res, 400, 'Напишите название задачи');
-  const status = STATUSES.includes(b.status) ? b.status : 'todo';
+  const status = b.status && statusExists(req.user.id, b.status) ? b.status : 'todo';
   const priority = PRIORITIES.includes(b.priority) ? b.priority : 'medium';
   const due = validDate(b.due_date) && b.due_date ? b.due_date : null;
   const pos = db.prepare('SELECT COALESCE(MIN(position), 1) - 1 AS p FROM tasks WHERE user_id = ? AND status = ?')
@@ -400,7 +418,7 @@ app.patch('/api/tasks/:id', auth, (req, res) => {
   if (b.title !== undefined) next.title = String(b.title).slice(0, 300);
   if (b.description !== undefined) next.description = clean(b.description);
   if (b.status !== undefined) {
-    if (!STATUSES.includes(b.status)) return httpError(res, 400, 'Неизвестный статус');
+    if (!statusExists(req.user.id, b.status)) return httpError(res, 400, 'Такого статуса нет. Обновите страницу');
     if (b.status !== t.status) {
       next.position = db.prepare('SELECT COALESCE(MIN(position), 1) - 1 AS p FROM tasks WHERE user_id = ? AND status = ?')
         .get(req.user.id, b.status).p;
@@ -424,7 +442,7 @@ app.patch('/api/tasks/:id', auth, (req, res) => {
 
 app.post('/api/tasks/reorder', auth, (req, res) => {
   const { status, ids } = req.body || {};
-  if (!STATUSES.includes(status) || !Array.isArray(ids)) return httpError(res, 400, 'Некорректные данные');
+  if (!statusExists(req.user.id, status) || !Array.isArray(ids)) return httpError(res, 400, 'Некорректные данные');
   const upd = db.prepare(`UPDATE tasks SET status = ?, position = ?, updated_at = datetime('now')
     WHERE id = ? AND user_id = ?`);
   db.transaction(() => ids.forEach((id, i) => upd.run(status, i, id, req.user.id)))();
@@ -441,6 +459,73 @@ app.post('/api/tasks/:id/favorite', auth, (req, res) => {
 app.delete('/api/tasks/:id', auth, (req, res) => {
   db.prepare('DELETE FROM tasks WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
   res.json({ ok: true });
+});
+
+// ---------- task statuses ----------
+
+app.get('/api/statuses', auth, (req, res) => res.json(listStatuses(req.user.id)));
+
+app.post('/api/statuses', auth, (req, res) => {
+  const list = listStatuses(req.user.id);
+  if (list.length >= MAX_STATUSES) return httpError(res, 400, `Статусов может быть не больше ${MAX_STATUSES}`);
+  const name = cleanStatusName(req.body?.name);
+  if (!name) return httpError(res, 400, 'Напишите название статуса');
+  if (nameTaken(req.user.id, name)) return httpError(res, 400, 'Статус с таким названием уже есть');
+  const color = STATUS_COLORS.includes(req.body?.color) ? req.body.color : 'blue';
+  const key = 's_' + crypto.randomBytes(5).toString('hex');
+  // Новый статус встаёт перед «Готово», чтобы «Готово» оставалось последним
+  const done = list.find((s) => s.key === 'done');
+  const pos = done ? done.position : list.length;
+  db.transaction(() => {
+    db.prepare('UPDATE task_statuses SET position = position + 1 WHERE user_id = ? AND position >= ?').run(req.user.id, pos);
+    db.prepare('INSERT INTO task_statuses (user_id, key, name, color, position) VALUES (?, ?, ?, ?, ?)')
+      .run(req.user.id, key, name, color, pos);
+  })();
+  res.json(listStatuses(req.user.id));
+});
+
+app.patch('/api/statuses/:key', auth, (req, res) => {
+  const s = listStatuses(req.user.id).find((x) => x.key === req.params.key);
+  if (!s) return httpError(res, 404, 'Статус не найден');
+  const b = req.body || {};
+  let { name, color } = s;
+  if (b.name !== undefined) {
+    name = cleanStatusName(b.name);
+    if (!name) return httpError(res, 400, 'Название статуса не может быть пустым');
+    if (nameTaken(req.user.id, name, s.key)) return httpError(res, 400, 'Статус с таким названием уже есть');
+  }
+  if (b.color !== undefined) {
+    if (!STATUS_COLORS.includes(b.color)) return httpError(res, 400, 'Неизвестный цвет');
+    color = b.color;
+  }
+  db.prepare('UPDATE task_statuses SET name = ?, color = ? WHERE user_id = ? AND key = ?').run(name, color, req.user.id, s.key);
+  res.json(listStatuses(req.user.id));
+});
+
+app.post('/api/statuses/reorder', auth, (req, res) => {
+  const keys = req.body?.keys;
+  const current = listStatuses(req.user.id).map((s) => s.key);
+  if (!Array.isArray(keys) || keys.length !== current.length || !current.every((k) => keys.includes(k))) {
+    return httpError(res, 400, 'Некорректные данные');
+  }
+  const upd = db.prepare('UPDATE task_statuses SET position = ? WHERE user_id = ? AND key = ?');
+  db.transaction(() => keys.forEach((k, i) => upd.run(i, req.user.id, k)))();
+  res.json(listStatuses(req.user.id));
+});
+
+// Удаление статуса: его задачи переходят в «Нужно сделать»
+app.delete('/api/statuses/:key', auth, (req, res) => {
+  const key = req.params.key;
+  if (FIXED_STATUSES.includes(key)) return httpError(res, 400, 'Этот статус нельзя удалить, но можно переименовать');
+  if (!statusExists(req.user.id, key)) return httpError(res, 404, 'Статус не найден');
+  db.transaction(() => {
+    const start = db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM tasks WHERE user_id = ? AND status = 'todo'").get(req.user.id).p;
+    const ids = db.prepare('SELECT id FROM tasks WHERE user_id = ? AND status = ? ORDER BY position, id').all(req.user.id, key);
+    const upd = db.prepare("UPDATE tasks SET status = 'todo', position = ?, updated_at = datetime('now') WHERE id = ?");
+    ids.forEach((r, i) => upd.run(start + i, r.id));
+    db.prepare('DELETE FROM task_statuses WHERE user_id = ? AND key = ?').run(req.user.id, key);
+  })();
+  res.json(listStatuses(req.user.id));
 });
 
 // ---------- search ----------
