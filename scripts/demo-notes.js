@@ -6,13 +6,6 @@ const sanitizeHtml = require('sanitize-html');
 const db = require('../db');
 
 const email = process.argv[2];
-const user = email
-  ? db.prepare('SELECT id, email FROM users WHERE email = ?').get(email)
-  : db.prepare('SELECT id, email FROM users WHERE is_admin = 1 ORDER BY id LIMIT 1').get();
-if (!user) {
-  console.log(email ? `Пользователь ${email} не найден` : 'Пользователей пока нет — сначала создайте администратора');
-  process.exit(1);
-}
 
 const plain = (html) => sanitizeHtml(html.replace(/<\/(p|div|h\d|li|pre|blockquote)>|<br\s*\/?>/gi, ' $&'),
   { allowedTags: [], allowedAttributes: {} }).replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
@@ -63,22 +56,34 @@ const tree = [
 const count = (nodes) => nodes.reduce((n, [, , kids = []]) => n + 1 + count(kids), 0);
 const total = count(tree);
 
-const ins = db.prepare(`INSERT INTO pages (user_id, parent_id, title, content, search_text, position, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, datetime('now', ?), datetime('now', ?))`);
-const nextPos = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM pages WHERE user_id = ? AND parent_id IS ?');
-
 // Разная «давность» изменения, чтобы «Недавно изменённые» и подписи «N дней назад» выглядели живо
 let n = 0;
 const age = () => `-${Math.round((n++ * 37) % 900 + n * 11)} hours`;
 
-db.transaction(() => {
-  const add = (parentId, nodes) => nodes.forEach(([title, content, kids = []], i) => {
-    const pos = parentId === null ? nextPos.get(user.id, null).p : i;
-    const a = age();
-    const id = ins.run(user.id, parentId, title, content, `${title} ${plain(content)}`.toLowerCase(), pos, a, a).lastInsertRowid;
-    add(id, kids);
+(async () => {
+  await db.init();
+  const user = email
+    ? await db.get('SELECT id, email FROM users WHERE email = ?', email)
+    : await db.get('SELECT id, email FROM users WHERE is_admin = 1 ORDER BY id LIMIT 1');
+  if (!user) {
+    console.log(email ? `Пользователь ${email} не найден` : 'Пользователей пока нет — сначала создайте администратора');
+    process.exit(1);
+  }
+  await db.tx(async () => {
+    const add = async (parentId, nodes) => {
+      for (const [i, [title, content, kids = []]] of nodes.entries()) {
+        const pos = parentId === null
+          ? (await db.get('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM pages WHERE user_id = ? AND parent_id IS ?', user.id, null)).p
+          : i;
+        const a = age();
+        const id = (await db.run(`INSERT INTO pages (user_id, parent_id, title, content, search_text, position, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, datetime('now', ?), datetime('now', ?))`,
+        user.id, parentId, title, content, `${title} ${plain(content)}`.toLowerCase(), pos, a, a)).lastInsertRowid;
+        await add(id, kids);
+      }
+    };
+    await add(null, tree);
   });
-  add(null, tree);
-})();
-
-console.log(`Добавлено заметок: ${total} (пользователь ${user.email}). Обновите страницу в браузере.`);
+  await db.close();
+  console.log(`Добавлено заметок: ${total} (пользователь ${user.email}). Обновите страницу в браузере.`);
+})().catch((e) => { console.error(e.message || e); process.exit(1); });

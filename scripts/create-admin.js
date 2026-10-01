@@ -13,18 +13,22 @@ if (password.length < 8) {
   process.exit(1);
 }
 
-const hash = bcrypt.hashSync(password, 10);
-const existing = db.prepare('SELECT id, kdf_salt FROM users WHERE email = ?').get(email);
-if (existing?.kdf_salt) {
-  // Заметки зашифрованы ключом из пароля: новый пароль отсюда задать нельзя, иначе данные не откроются
-  console.log('У этого аккаунта заметки зашифрованы, поэтому задать пароль отсюда нельзя.');
-  console.log('Восстановите доступ на экране входа: «Забыли пароль?» и код восстановления.');
-  process.exit(1);
-} else if (existing) {
-  db.prepare('UPDATE users SET password_hash = ?, is_admin = 1 WHERE id = ?').run(hash, existing.id);
-  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(existing.id);
-  console.log(`Пароль обновлён, ${email} теперь администратор`);
-} else {
-  db.prepare('INSERT INTO users (email, name, password_hash, is_admin) VALUES (?, ?, ?, 1)').run(email.trim().toLowerCase(), name, hash);
-  console.log(`Администратор ${email} создан. При первом входе он получит код восстановления, а заметки зашифруются`);
-}
+(async () => {
+  await db.init();
+  const hash = bcrypt.hashSync(password, 10);
+  const existing = await db.get('SELECT id, kdf_salt FROM users WHERE email = ?', email);
+  if (existing?.kdf_salt) {
+    // Заметки зашифрованы ключом из пароля: новый пароль отсюда задать нельзя, иначе данные не откроются
+    console.log('У этого аккаунта заметки зашифрованы, поэтому задать пароль отсюда нельзя.');
+    console.log('Восстановите доступ на экране входа: «Забыли пароль?» и код восстановления.');
+    process.exit(1);
+  } else if (existing) {
+    await db.run('UPDATE users SET password_hash = ?, is_admin = 1 WHERE id = ?', hash, existing.id);
+    await db.run('DELETE FROM sessions WHERE user_id = ?', existing.id);
+    console.log(`Пароль обновлён, ${email} теперь администратор`);
+  } else {
+    await db.run('INSERT INTO users (email, name, password_hash, is_admin) VALUES (?, ?, ?, 1)', email.trim().toLowerCase(), name, hash);
+    console.log(`Администратор ${email} создан. При первом входе он получит код восстановления, а заметки зашифруются`);
+  }
+  await db.close();
+})().catch((e) => { console.error(e.message || e); process.exit(1); });
