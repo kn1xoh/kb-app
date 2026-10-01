@@ -995,7 +995,7 @@ function makeEditor(editor, onChange) {
     <button class="icon-btn" data-cmd="insertOrderedList" title="Нумерованный список" aria-label="Нумерованный список">${icon('ol')}</button>
     <button class="icon-btn" data-cmd="checklist" title="Чек-лист" aria-label="Чек-лист">${icon('checklist')}</button>
     <span class="sep"></span>
-    <button class="icon-btn" data-cmd="quote" title="Цитата" aria-label="Цитата">${icon('quote')}</button>
+    <button class="icon-btn" data-cmd="quote" title="Цитата (выйти — Enter на пустой строке)" aria-label="Цитата">${icon('quote')}</button>
     <button class="icon-btn" data-cmd="code" title="Блок кода (выйти — Enter на пустой строке)" aria-label="Блок кода">${icon('code')}</button>
     <button class="icon-btn" data-cmd="link" title="Ссылка (Ctrl+K)" aria-label="Ссылка">${icon('link')}</button>
     <button class="icon-btn" data-cmd="insertHorizontalRule" title="Разделитель" aria-label="Разделитель">${icon('hr')}</button>
@@ -1070,12 +1070,24 @@ function makeEditor(editor, onChange) {
     else if (cmd === 'code') toggleCode(editor, blk);
     else if (cmd === 'link') return askLink(editor, changed);
     else if (cmd === 'clear') { document.execCommand('removeFormat'); document.execCommand('unlink'); }
+    else if (cmd === 'insertHorizontalRule') {
+      document.execCommand(cmd);
+      const r = getSelection().getRangeAt(0);
+      const hr = $$('hr', editor).filter((h) => r.comparePoint(h, 0) <= 0).pop();
+      if (hr) {
+        // Chrome оставляет курсор «голым» текстом после линии — переносим его в абзац
+        const next = hr.nextSibling;
+        if (next && next.nodeType === 3 && !next.data.trim()) next.remove();
+        paraNear(hr, 'after');
+      }
+    }
     else document.execCommand(cmd);
     changed();
     refresh();
   });
 
   $$('pre', editor).forEach(flattenCode);
+  mergeQuotes(editor);
 
   function isEmpty() { return !editor.textContent.trim() && !editor.querySelector('li, hr, pre, h1, h2, h3, blockquote'); }
   function markEmpty() { editor.classList.toggle('is-empty', isEmpty()); }
@@ -1090,7 +1102,17 @@ function makeEditor(editor, onChange) {
       getSelection().addRange(r);
     }
   });
-  editor.addEventListener('input', () => {
+  editor.addEventListener('input', (e) => {
+    // жирный/курсив/ссылка не переносятся на новую пустую строку
+    if (e.inputType === 'insertParagraph') {
+      const nb = blockOf();
+      if (nb && !nb.textContent && !nb.closest('pre, blockquote')) {
+        if (nb.querySelector('b, strong, i, em, u, s, strike, a, span, font, code')) { nb.innerHTML = '<br>'; caretTo(nb, 0); }
+        ['bold', 'italic', 'underline', 'strikeThrough'].forEach((c) => {
+          try { if (document.queryCommandState(c)) document.execCommand(c); } catch { /* unsupported */ }
+        });
+      }
+    }
     $$('ul.checklist > li:not([data-checked])', editor).forEach((li) => li.setAttribute('data-checked', 'false'));
     markEmpty();
     changed();
@@ -1108,11 +1130,49 @@ function makeEditor(editor, onChange) {
         refresh();
         return;
       }
-      if (e.key === 'ArrowDown' && !e.shiftKey && caretOnLastLine(pre)) {
-        // выход вниз из блока кода, даже если после него ничего нет
-        if (!pre.nextElementSibling) { e.preventDefault(); exitCode(pre); changed(); refresh(); return; }
-      }
       if (e.key === 'Tab') { e.preventDefault(); document.execCommand('insertText', false, '  '); return; }
+      if (e.key === 'Backspace' && getSelection().isCollapsed && caretOffsetIn(pre) === 0) {
+        e.preventDefault(); toggleCode(editor, pre); changed(); refresh(); return;
+      }
+    }
+    const blk = blockOf();
+    const bq = !pre && blk?.closest('blockquote');
+    const plainKey = !e.ctrlKey && !e.metaKey && !e.altKey;
+    if (bq && e.key === 'Enter' && plainKey && !blk.closest('li')) {
+      e.preventDefault();
+      quoteEnter(bq, e.shiftKey);
+      changed();
+      refresh();
+      return;
+    }
+    // Backspace в начале цитаты или заголовка — превращает их в обычный текст
+    const head = !pre && blk?.closest('h1, h2, h3, blockquote');
+    if (head && e.key === 'Backspace' && plainKey && getSelection().isCollapsed && !splitAtCaret(head).before.toString().length
+        && lastNodeOf(splitAtCaret(head).before.cloneContents())?.nodeName !== 'BR') {
+      e.preventDefault();
+      if (head.tagName === 'BLOCKQUOTE') {
+        const ps = [];
+        let cur = document.createElement('p');
+        [...head.childNodes].forEach((n) => { if (n.nodeName === 'BR') { ps.push(cur); cur = document.createElement('p'); } else cur.append(n); });
+        ps.push(cur);
+        ps.forEach((p) => { if (!p.childNodes.length) p.innerHTML = '<br>'; });
+        head.replaceWith(...ps);
+        caretTo(ps[0], 0);
+      } else document.execCommand('formatBlock', false, '<p>');
+      changed();
+      refresh();
+      return;
+    }
+    // стрелка вниз/вверх из последнего/первого блока (цитата, код, список, заголовок) — в новый абзац
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && plainKey && !e.shiftKey && getSelection().isCollapsed) {
+      const down = e.key === 'ArrowDown';
+      const top = topBlock(editor, getSelection().anchorNode);
+      const edgeBlock = top && (down ? !top.nextElementSibling : !top.previousElementSibling);
+      if (edgeBlock && !isPlainPara(top)) {
+        const onEdge = pre ? (down ? caretOnLastLine(pre) : !pre.textContent.slice(0, caretOffsetIn(pre)).includes('\n'))
+          : caretOnEdgeLine(top, down ? 'last' : 'first');
+        if (onEdge) { e.preventDefault(); paraNear(top, down ? 'after' : 'before'); changed(); refresh(); return; }
+      }
     }
     if (e.key === 'Enter' && !e.shiftKey && blockOf()?.closest('ul.checklist')) {
       setTimeout(() => { const li = blockOf(); if (li?.tagName === 'LI') li.setAttribute('data-checked', 'false'); }, 0);
@@ -1130,6 +1190,14 @@ function makeEditor(editor, onChange) {
   });
 
   editor.addEventListener('click', (e) => {
+    // клик в пустое место под цитатой/кодом/списком в конце — новый абзац
+    const last = editor.lastElementChild;
+    if (e.target === editor && last && !isPlainPara(last) && e.clientY > last.getBoundingClientRect().bottom) {
+      paraNear(last, 'after');
+      changed();
+      refresh();
+      return;
+    }
     const li = e.target.closest('ul.checklist > li');
     if (li && e.target === li && e.clientX - li.getBoundingClientRect().left < 26) {
       li.setAttribute('data-checked', li.getAttribute('data-checked') === 'true' ? 'false' : 'true');
@@ -1206,18 +1274,119 @@ function caretOnLastLine(pre) {
 }
 function exitCode(pre, removeEmptyLastLine = false) {
   if (removeEmptyLastLine) { pre.textContent = pre.textContent.replace(/\n\n$/, '\n'); }
-  let next = pre.nextElementSibling;
-  if (!next || next.tagName !== 'P' || next.textContent.trim()) {
-    next = document.createElement('p');
-    next.innerHTML = '<br>';
-    pre.after(next);
-  }
-  const r = document.createRange();
-  r.setStart(next, 0);
-  r.collapse(true);
-  getSelection().removeAllRanges();
-  getSelection().addRange(r);
+  paraNear(pre, 'after');
 }
+
+/* ---------- выход из блоков: цитата, код, списки, заголовки, разделитель ---------- */
+function caretTo(node, offset = 0) {
+  const r = document.createRange();
+  r.setStart(node, offset);
+  r.collapse(true);
+  const sel = getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+// ставит курсор в пустой абзац рядом с блоком (берёт соседний пустой, если он уже есть)
+function paraNear(block, where) {
+  let p = where === 'after' ? block.nextElementSibling : block.previousElementSibling;
+  if (!p || p.tagName !== 'P' || p.textContent.trim() || p.querySelector('ul, ol, pre, blockquote, hr')) {
+    p = document.createElement('p');
+    p.innerHTML = '<br>';
+    block[where](p);
+  }
+  caretTo(p, 0);
+  return p;
+}
+function toParagraph(block) {
+  const p = document.createElement('p');
+  p.innerHTML = '<br>';
+  block.replaceWith(p);
+  caretTo(p, 0);
+}
+// текст/узлы от начала элемента до курсора и от курсора до конца
+function splitAtCaret(el) {
+  const sel = getSelection();
+  const before = document.createRange();
+  before.selectNodeContents(el);
+  before.setEnd(sel.anchorNode, sel.anchorOffset);
+  const after = document.createRange();
+  after.selectNodeContents(el);
+  after.setStart(sel.anchorNode, sel.anchorOffset);
+  return { before, after };
+}
+function lastNodeOf(frag) {
+  const w = document.createTreeWalker(frag, NodeFilter.SHOW_ALL);
+  let last = null;
+  while (w.nextNode()) {
+    const n = w.currentNode;
+    if (n.nodeType === 3 && !n.data.length) continue;
+    last = n;
+  }
+  return last;
+}
+function trimTrailingBreaks(el) {
+  for (;;) {
+    let n = el.lastChild;
+    while (n && n.nodeType === 1 && n.tagName !== 'BR' && n.lastChild) n = n.lastChild;
+    if (!n) return;
+    if ((n.nodeType === 3 && !n.data.trim()) || n.nodeName === 'BR') {
+      const parent = n.parentNode;
+      n.remove();
+      if (parent !== el && !parent.childNodes.length) parent.remove();
+    } else return;
+  }
+}
+// Enter в цитате: новая строка внутри той же цитаты; Enter на пустой последней строке (или Shift+Enter) — выход
+function quoteEnter(bq, exit) {
+  const { before, after } = splitAtCaret(bq);
+  const atEnd = !after.toString().length && !after.cloneContents().querySelector?.('hr, img');
+  const pre = before.cloneContents();
+  const lastIsBreak = !before.toString().length || lastNodeOf(pre)?.nodeName === 'BR';
+  if (exit || (atEnd && lastIsBreak)) {
+    if (!exit || atEnd) trimTrailingBreaks(bq);
+    if (!bq.textContent.trim()) return toParagraph(bq);
+    return paraNear(bq, 'after');
+  }
+  document.execCommand('insertLineBreak');
+}
+// соседние цитаты (так Chrome делал раньше на каждый Enter) склеиваем в одну
+function mergeQuotes(editor) {
+  $$(':scope > blockquote', editor).forEach((bq) => {
+    const prev = bq.previousElementSibling;
+    if (prev?.tagName === 'BLOCKQUOTE' && !prev.querySelector('p, ul, ol, pre') && !bq.querySelector('p, ul, ol, pre')) {
+      if (bq.textContent.trim()) prev.append(document.createElement('br'), ...bq.childNodes);
+      bq.remove();
+    }
+  });
+}
+function caretRect() {
+  const sel = getSelection();
+  if (!sel.rangeCount) return null;
+  const r = sel.getRangeAt(0).cloneRange();
+  r.collapse(true);
+  let rect = r.getBoundingClientRect();
+  if (!rect.height) {
+    const n = r.startContainer.nodeType === 1 ? r.startContainer.childNodes[r.startOffset] || r.startContainer : r.startContainer.parentElement;
+    if (n?.getBoundingClientRect) rect = n.getBoundingClientRect();
+  }
+  return rect.height ? rect : null;
+}
+// курсор на первой/последней строке блока (по положению на экране)
+function caretOnEdgeLine(block, edge) {
+  const cr = caretRect();
+  if (!cr) return true;
+  const br = block.getBoundingClientRect();
+  const cs = getComputedStyle(block);
+  const lh = parseFloat(getComputedStyle(getSelection().anchorNode.parentElement || block).lineHeight) || 24;
+  if (edge === 'last') return br.bottom - parseFloat(cs.paddingBottom) - cr.bottom < lh * 0.75;
+  return cr.top - (br.top + parseFloat(cs.paddingTop)) < lh * 0.75;
+}
+function topBlock(editor, node) {
+  let n = node?.nodeType === 1 ? node : node?.parentElement;
+  while (n && n.parentElement !== editor) n = n.parentElement;
+  return n && editor.contains(n) ? n : null;
+}
+const isPlainPara = (el) => el?.tagName === 'P' && !el.querySelector('ul, ol, pre, blockquote, hr');
 // Enter — новая строка кода; Enter на пустой последней строке (или Shift+Enter) — выйти из блока
 function codeEnter(editor, pre, exit) {
   const o = caretOffsetIn(pre);
