@@ -1341,7 +1341,7 @@ function taskMeta(t) {
   return `<span class="t-meta">${parts.join('')}</span>`;
 }
 function checkBtn(t) {
-  const cls = t.status === 'done' ? 'on' : t.status !== 'todo' ? 'half' : '';
+  const cls = t.status === 'done' ? 'on' : '';
   return `<button class="check ${cls}" data-check="${t.id}" aria-label="${t.status === 'done' ? 'Вернуть в работу' : 'Отметить выполненной'}">${icon('check')}</button>`;
 }
 const favMark = (t) => (t.favorite_at ? icon('star', 'filled mini-star') : '');
