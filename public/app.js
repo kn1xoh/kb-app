@@ -61,6 +61,7 @@ const ICONS = {
   strike: 'M4 12h16M16.5 7c-.6-1.6-2.2-2.5-4.4-2.5-2.6 0-4.6 1.3-4.6 3.3 0 1.4.9 2.4 2.6 3M8 16.3c.6 2 2.3 3.2 4.6 3.2 2.7 0 4.6-1.3 4.6-3.4 0-.8-.2-1.4-.7-1.9',
   text: 'M5 7V5h14v2M12 5v14M9 19h6',
   chevronDown: 'M7 10l5 5 5-5',
+  filter: 'M4 7h16M7 12h10M10 17h4',
   star: 'M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.75 1-5.8L3.5 9.7l5.9-.9z',
 };
 // Логотип Silo: вид сверху в шахту силоса — стена и винтовая лестница, уходящая вглубь
@@ -158,7 +159,7 @@ const S = {
   statuses: [],
   expanded: new Set(store.get('kb-expanded', [])),
   taskView: store.get('kb-task-view', 'list'),
-  taskFilter: 'all',
+  taskFilter: { due: 'all', status: [], prio: [] },
   page: null, // currently open page with content
   numbering: store.get('kb-numbering', true),
   selectMode: false, // bulk selection on the notes home
@@ -1577,12 +1578,62 @@ function cleanHTML(html) {
 // Завершённая задача — отдельный признак completed_at, а не статус: статус сохраняется, чтобы вернуть задачу на место
 const isDone = (t) => !!t.completed_at;
 const taskById = (id) => S.tasks.find((t) => t.id === id);
-const FILTERS = [
-  { id: 'all', title: 'Все', test: (t) => !isDone(t) },
-  { id: 'today', title: 'На сегодня', test: (t) => !isDone(t) && t.due_date && t.due_date <= todayStr() },
-  { id: 'overdue', title: 'Просроченные', test: (t) => !isDone(t) && t.due_date && t.due_date < todayStr() },
-  { id: 'high', title: 'Высокий приоритет', test: (t) => !isDone(t) && t.priority === 'high' },
+// Фильтры задач — одна кнопка «Фильтр»: срок (один вариант), статусы и приоритеты (несколько; внутри группы — «или», между группами — «и»)
+const DUE_FILTERS = [
+  { id: 'all', title: 'Любой срок', test: () => true },
+  { id: 'today', title: 'На сегодня', test: (t) => t.due_date && t.due_date <= todayStr() },
+  { id: 'overdue', title: 'Просроченные', test: (t) => t.due_date && t.due_date < todayStr() },
 ];
+const tf = () => {
+  const f = S.taskFilter;
+  // статус могли удалить — такой выбор просто не учитываем
+  f.status = f.status.filter((k) => S.statuses.some((x) => x.key === k));
+  return f;
+};
+const filterCount = () => { const f = tf(); return (f.due !== 'all') + (f.status.length ? 1 : 0) + (f.prio.length ? 1 : 0); };
+// skip — группа, которую не учитывать (для счётчиков в меню фильтра)
+function matchTask(t, skip) {
+  const f = tf();
+  if (skip !== 'due' && !DUE_FILTERS.find((d) => d.id === f.due).test(t)) return false;
+  if (skip !== 'status' && f.status.length && !f.status.includes(t.status)) return false;
+  if (skip !== 'prio' && f.prio.length && !f.prio.includes(t.priority)) return false;
+  return true;
+}
+function setTaskFilter(fn) {
+  fn(S.taskFilter);
+  S.taskSelected.clear();
+  renderTasksBody();
+}
+function filterMenuHtml() {
+  const f = tf();
+  const active = S.tasks.filter((t) => !isDone(t));
+  const n = (group, test) => active.filter((t) => matchTask(t, group) && test(t)).length;
+  const row = (m, on, label, count, kind) => `<button data-m="${m}" data-keep="1" role="${kind}" aria-checked="${on}" class="${on ? 'on' : ''}">
+    <span class="fm-mark ${kind}">${on ? icon('check') : ''}</span>${label}<span class="fm-n">${count}</span></button>`;
+  return `<div class="menu-label">Срок</div>
+    ${DUE_FILTERS.map((d) => row(`due:${d.id}`, f.due === d.id, d.title, n('due', d.test), 'radio')).join('')}
+    <hr><div class="menu-label">Статус</div>
+    ${S.statuses.map((st) => row(`status:${st.key}`, f.status.includes(st.key),
+      `<span class="dot" style="background:${statusColor(st.key)}"></span>${esc(st.name)}`, n('status', (t) => t.status === st.key), 'checkbox')).join('')}
+    <hr><div class="menu-label">Приоритет</div>
+    ${Object.entries(PRIORITY).map(([k, v]) => row(`prio:${k}`, f.prio.includes(k),
+      `<span class="prio-dot ${k}"></span>${v}`, n('prio', (t) => t.priority === k), 'checkbox')).join('')}
+    ${filterCount() ? `<hr><button data-m="reset" data-keep="1" class="fm-reset">${icon('x')}Сбросить фильтры</button>` : ''}`;
+}
+function openFilterMenu(anchor) {
+  const menu = showMenu(anchor, filterMenuHtml(), (m) => {
+    const [group, val] = m.split(':');
+    setTaskFilter((f) => {
+      if (group === 'reset') { f.due = 'all'; f.status = []; f.prio = []; }
+      else if (group === 'due') f.due = val;
+      else f[group] = f[group].includes(val) ? f[group].filter((x) => x !== val) : [...f[group], val];
+    });
+    const focused = document.activeElement?.dataset?.m;
+    menu.innerHTML = filterMenuHtml();
+    ($(`[data-m="${focused}"]`, menu) || $('button', menu))?.focus();
+  });
+  menu.classList.add('filter-menu');
+}
 
 function renderTasks() {
   S.page = null;
@@ -1632,8 +1683,11 @@ let creatingTask = false;
 async function createTask() {
   if (creatingTask) return;
   creatingTask = true;
-  const extra = S.taskFilter === 'today' || S.taskFilter === 'overdue' ? { due_date: todayStr() }
-    : S.taskFilter === 'high' ? { priority: 'high' } : {};
+  // новая задача сразу попадает под выбранный фильтр
+  const f = tf(), extra = {};
+  if (f.due !== 'all') extra.due_date = todayStr();
+  if (f.prio.length === 1) extra.priority = f.prio[0];
+  if (f.status.length === 1) extra.status = f.status[0];
   try {
     const t = await api('POST', '/api/tasks', { title: '', ...extra });
     S.tasks.push(t);
@@ -1661,11 +1715,7 @@ function renderTasksBody() {
   const doneN = S.tasks.filter(isDone).length;
   $('#tasks-sub').textContent = total
     ? `${total} ${plural(total, 'задача', 'задачи', 'задач')}${doneN ? ` · ${doneN} ${plural(doneN, 'завершена', 'завершены', 'завершено')}` : ''}` : '';
-  $('#filters').innerHTML = FILTERS.map((f) => {
-    const n = S.tasks.filter(f.test).length;
-    return `<button class="chip ${S.taskFilter === f.id ? 'on' : ''}" data-filter="${f.id}">${f.title}<span class="n">${n}</span></button>`;
-  }).join('');
-  $$('[data-filter]').forEach((b) => b.onclick = () => { S.taskFilter = b.dataset.filter; S.taskSelected.clear(); renderTasksBody(); });
+  renderFilterBar();
   const selBtn = $('#task-select');
   selBtn.textContent = S.taskSelect ? 'Готово' : 'Выбрать';
   selBtn.classList.toggle('on', S.taskSelect);
@@ -1678,12 +1728,14 @@ function renderTasksBody() {
     return;
   }
 
-  const filter = FILTERS.find((f) => f.id === S.taskFilter);
-  const list = S.tasks.filter(filter.test);
+  const f = tf();
+  const filtered = filterCount() > 0;
+  const list = S.tasks.filter((t) => !isDone(t) && matchTask(t));
+  const columns = f.status.length ? S.statuses.filter((x) => f.status.includes(x.key)) : S.statuses;
   const byStatus = (s) => list.filter((t) => t.status === s).sort((a, b) => a.position - b.position || b.id - a.id);
   let main;
   if (S.taskView === 'board') {
-    main = `<div class="board ${S.taskSelect ? 'selecting' : ''}" style="--cols:${S.statuses.length}">${S.statuses.map(({ key: s }) => {
+    main = `<div class="board ${S.taskSelect ? 'selecting' : ''}" style="--cols:${columns.length}">${columns.map(({ key: s }) => {
       const items = byStatus(s);
       return `<section class="column" data-status="${s}">
         <div class="column-head"><span class="dot" style="background:${statusColor(s)}"></span><span class="col-name">${esc(statusOf(s).name)}</span><span class="kids-n">${items.length}</span></div>
@@ -1701,9 +1753,10 @@ function renderTasksBody() {
         <h3><span class="dot" style="background:${statusColor(g.s)}"></span>${esc(statusOf(g.s).name)}<span class="kids-n">${g.items.length}</span></h3>
         <div class="task-list">${g.items.map(taskRow).join('')}</div>
       </section>`).join('')
-      : `<p class="muted">${S.taskFilter === 'all' ? 'Все задачи завершены.' : 'Под этот фильтр задач нет.'}</p>`;
+      : `<p class="muted">${filtered ? 'Под этот фильтр задач нет.' : 'Все задачи завершены.'}</p>`;
   }
-  body.innerHTML = main + (S.taskFilter === 'all' ? doneSection() : '') + taskTrashSection() + taskBulkBar();
+  // завершённые фильтруются по статусу и приоритету; при фильтре по сроку блок не нужен
+  body.innerHTML = main + (f.due === 'all' ? doneSection() : '') + taskTrashSection() + taskBulkBar();
   const allBtn = $('[data-bulk="all"]', body);
   if (allBtn) {
     const visible = $$('[data-task]', body).length;
@@ -1713,9 +1766,18 @@ function renderTasksBody() {
   if (S.taskTrash === null && S.taskTrashOpen) loadTaskTrash();
 }
 
+// Кнопка «Фильтр»: подсвечена и показывает число групп, если что-то выбрано
+function renderFilterBar() {
+  const box = $('#filters');
+  const n = filterCount();
+  const html = `<button class="btn ghost filter-btn ${n ? 'on' : ''}" id="task-filter" aria-haspopup="true">${icon('filter')}Фильтр${n ? `<span class="fb-n">${n}</span>` : ''}</button>`;
+  box.innerHTML = html;
+  $('#task-filter', box).onclick = (e) => openFilterMenu(e.currentTarget);
+}
+
 // «Завершённые» — свёрнутый блок под задачами, свежие сверху
 function doneSection() {
-  const done = S.tasks.filter(isDone).sort((a, b) => toDate(b.completed_at) - toDate(a.completed_at) || b.id - a.id);
+  const done = S.tasks.filter((t) => isDone(t) && matchTask(t)).sort((a, b) => toDate(b.completed_at) - toDate(a.completed_at) || b.id - a.id);
   if (!done.length) return '';
   const shown = S.doneAll ? done : done.slice(0, DONE_PAGE);
   return `<section class="task-group fold done-group">

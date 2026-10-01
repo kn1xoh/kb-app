@@ -957,3 +957,30 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
 .confirm-word .input { letter-spacing: .04em; }
 .cw-hint { min-height: 18px; font-size: 13px; color: var(--warn); }
 .modal .btn.danger.solid:disabled { opacity: .45; }
+
+/* ---------- фильтр задач: одна кнопка и меню ---------- */
+.filters { align-items: center; }
+.filters-row .filter-btn { gap: 6px; }
+.filters-row .filter-btn svg.i { width: 16px; height: 16px; }
+.filters-row .filter-btn.on { color: var(--accent); background: var(--accent-soft); font-weight: 500; }
+.fb-n { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--accent); color: var(--bg); font-size: 11.5px; font-weight: 600; display: inline-grid; place-items: center; font-variant-numeric: tabular-nums; }
+.filter-menu { width: 260px; max-height: calc(100vh - 16px); overflow-y: auto; }
+.filter-menu button { padding: 7px 10px; }
+.filter-menu button.on { color: var(--fg); }
+.filter-menu .menu-label { padding: 6px 10px 2px; }
+.fm-mark { width: 16px; height: 16px; flex: none; display: grid; place-items: center; border: 1.5px solid var(--faint); color: var(--bg); }
+.fm-mark.checkbox { border-radius: 4px; }
+.fm-mark.radio { border-radius: 50%; }
+.filter-menu button.on .fm-mark { background: var(--accent); border-color: var(--accent); }
+.fm-mark svg.i { width: 12px; height: 12px; stroke-width: 3; }
+.filter-menu .dot, .prio-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-right: -2px; }
+.prio-dot.high { background: var(--danger); }
+.prio-dot.medium { background: var(--warn); }
+.prio-dot.low { background: var(--faint); }
+.fm-n { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.filter-menu .fm-reset { color: var(--muted); }
+.filter-menu .fm-reset svg.i { width: 16px; height: 16px; }
+@media (max-width: 860px), (pointer: coarse) {
+  .filters-row .filter-btn { height: var(--tap); }
+  .filter-menu button { padding: 0 12px; min-height: var(--tap); }
+}
