@@ -1290,13 +1290,57 @@ async function openPage(id) {
   if (!page.title && !page.content) title.focus();
 }
 
+// «Крошки»: если путь не помещается, средние уровни прячутся в «…» (по клику — список скрытых).
+// Скрываем по порядку: сначала самые старшие предки, потом родителя, потом «Заметки». Текущая заметка видна всегда.
+let crumbsRO = null;
 function renderCrumbs() {
   const el = $('#crumbs');
   if (!el || !S.page) return;
-  const chain = [...ancestors(S.page.id), pageById(S.page.id)].filter(Boolean);
   const num = $('#page-num');
   if (num) num.textContent = S.numbering ? `Заметка ${pageNumbers().get(S.page.id)} · ` : '';
-  el.innerHTML = `<a href="#/notes">Заметки</a>` + chain.map((p) => `<span class="sep">/</span><a href="#/notes/${p.id}">${esc(titleOf(p))}</a>`).join('');
+  const items = [{ href: '#/notes', title: 'Заметки', root: true },
+    ...[...ancestors(S.page.id), pageById(S.page.id)].filter(Boolean).map((p) => ({ href: `#/notes/${p.id}`, title: titleOf(p), id: p.id }))];
+  const last = items.length - 1;
+  const order = [];
+  for (let i = 1; i < last - 1; i++) order.push(i);
+  if (last >= 2) order.push(last - 1);
+  if (last >= 1) order.push(0);
+  const link = (it, i) => `<a href="${it.href}" title="${esc(it.title)}"${i === last ? ' class="cur" aria-current="page"' : ''}>${esc(it.title)}</a>`;
+  const draw = (hidden) => {
+    const parts = [];
+    let more = false;
+    items.forEach((it, i) => {
+      if (hidden.has(i)) {
+        if (!more) parts.push('<button class="crumb-more" type="button" aria-label="Показать весь путь" title="Показать весь путь">…</button>');
+        more = true;
+      } else { parts.push(link(it, i)); more = false; }
+    });
+    el.innerHTML = parts.join('<span class="sep">/</span>');
+  };
+  const hidden = new Set();
+  el.classList.add('measure');
+  draw(hidden);
+  for (const i of order) {
+    if (el.scrollWidth <= el.clientWidth + 1) break;
+    hidden.add(i);
+    draw(hidden);
+  }
+  el.classList.remove('measure');
+  const btn = $('.crumb-more', el);
+  if (btn) btn.onclick = () => showMenu(btn, items.filter((_, i) => hidden.has(i)).map((it) =>
+    `<button data-m="${esc(it.href)}">${it.root ? icon('book') : noteIcon(it.id)}<span class="crumb-item">${esc(it.title)}</span></button>`).join(''),
+    (href) => { location.hash = href.slice(1); });
+  if (!crumbsRO) {
+    let w = 0, raf = 0;
+    crumbsRO = new ResizeObserver(([e]) => {
+      const nw = Math.round(e.contentRect.width);
+      if (nw === w) return;
+      w = nw;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(renderCrumbs);
+    });
+  }
+  if (crumbsRO.el !== el) { crumbsRO.disconnect(); crumbsRO.observe(el); crumbsRO.el = el; }
 }
 
 function renderSubpages() {

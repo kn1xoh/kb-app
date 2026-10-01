@@ -208,7 +208,14 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .crumbs { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1; font-size: 14px; color: var(--muted); overflow: hidden; }
 .crumbs a { color: var(--muted); text-decoration: none; padding: 3px 6px; border-radius: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
 .crumbs a:hover { background: var(--hover); color: var(--fg); }
-.crumbs .sep { color: var(--faint); }
+.crumbs .sep { color: var(--faint); flex-shrink: 0; }
+.crumbs a:first-child { flex-shrink: 0; }
+.crumbs a.cur { color: var(--fg); max-width: 320px; }
+.crumbs.measure a { flex-shrink: 0; }
+.crumb-more { flex-shrink: 0; border: 0; background: none; color: var(--muted); font: inherit; line-height: 1; padding: 4px 7px; border-radius: 5px; cursor: pointer; }
+.crumb-more:hover, .crumb-more:focus-visible { background: var(--hover); color: var(--fg); outline: none; }
+.menu .crumb-item { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu:has(.crumb-item) { max-width: min(320px, calc(100vw - 16px)); }
 .save-state { font-size: 13px; color: var(--faint); white-space: nowrap; }
 
 /* ---------- note page ---------- */
@@ -861,10 +868,11 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
   .editor ul.checklist li { padding-left: 32px; }
   .editor ul.checklist li::before { width: 20px; height: 20px; top: .25em; border-radius: 5px; }
 
-  /* верхняя полоса: кнопки крупнее — первая «крошка» не сжимается */
+  /* верхняя полоса: кнопки крупнее */
   .topbar { gap: 4px; }
   .topbar > .icon-btn:last-child { margin-right: -6px; }
-  .crumbs a:first-child { flex-shrink: 0; }
+  .crumb-more { position: relative; }
+  .crumb-more::after { content: ''; position: absolute; inset: -9px -4px; }
 
   /* карточка задачи */
   .tp-actions { gap: 0; margin: -4px -10px 0 0; }
