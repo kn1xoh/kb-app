@@ -948,3 +948,11 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
 @media (max-width: 860px), (pointer: coarse) {
   .tp-complete-row .btn { height: var(--tap); }
 }
+
+/* ---------- подтверждение массового удаления словом «УДАЛИТЬ» ---------- */
+.confirm-word { margin-top: 2px; }
+.confirm-word > span { font-weight: 400; }
+.confirm-word b { color: var(--fg); font-weight: 600; letter-spacing: .04em; }
+.confirm-word .input { letter-spacing: .04em; }
+.cw-hint { min-height: 18px; font-size: 13px; color: var(--warn); }
+.modal .btn.danger.solid:disabled { opacity: .45; }

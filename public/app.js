@@ -738,6 +738,12 @@ function selectionInfo() {
 async function bulkDelete() {
   const { roots, all, total } = selectionInfo();
   if (!total) return;
+  const sub = total > roots.length ? ' вместе с подзаметками' : '';
+  const ok = await confirmBulkDelete(total, {
+    title: `Удалить ${total} ${plural(total, 'заметку', 'заметки', 'заметок')}?`,
+    text: `Выбранные заметки${sub} попадут в «Недавно удалённые» — их можно будет восстановить в течение 30 дней.`,
+  });
+  if (!ok) return;
   try {
     const { trashed } = await api('POST', '/api/pages/delete', { ids: roots });
     S.pages = S.pages.filter((p) => !all.has(p.id));
@@ -1790,6 +1796,14 @@ async function taskBulkAction(kind) {
     return renderTasksBody();
   }
   if (!ids.length) return;
+  if (kind === 'delete') {
+    const n = ids.length;
+    const ok = await confirmBulkDelete(n, {
+      title: `Удалить ${n} ${plural(n, 'задачу', 'задачи', 'задач')}?`,
+      text: 'Выбранные задачи попадут в «Недавно удалённые» — их можно будет восстановить в течение 30 дней.',
+    });
+    if (!ok) return;
+  }
   S.taskSelect = false;
   S.taskSelected.clear();
   if (kind === 'complete') return setCompleted(ids.filter((id) => !isDone(taskById(id))), true);
@@ -2388,6 +2402,39 @@ function confirmDialog({ title, text, okText = 'Ок', danger = false }) {
     m.onclose = () => { if (!done) resolve(false); };
     $('#ok', m).onclick = () => { done = true; closeModal(m); resolve(true); };
     $('#ok', m).focus();
+  });
+}
+
+// Подтверждение массового удаления: кнопка включается, только когда введено слово заглавными буквами
+const CONFIRM_WORD = 'УДАЛИТЬ';
+const CONFIRM_WORD_FROM = 5; // слово просим, если удаляется столько штук или больше; меньше — обычное «Удалить / Отмена»
+const confirmBulkDelete = (n, opts) => (n >= CONFIRM_WORD_FROM ? confirmTyped(opts) : confirmDialog({ ...opts, okText: 'Удалить', danger: true }));
+function confirmTyped({ title, text, okText = 'Удалить' }) {
+  return new Promise((resolve) => {
+    const m = openModal(`
+      <h2>${esc(title)}</h2><p>${esc(text)}</p>
+      <label class="field confirm-word">
+        <span>Чтобы подтвердить, введите <b>${CONFIRM_WORD}</b> заглавными буквами</span>
+        <input class="input" id="cw-input" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="cw-hint">
+        <small class="cw-hint" id="cw-hint"></small>
+      </label>
+      <div class="modal-actions"><button class="btn" data-close>Отмена</button><button class="btn danger solid" id="ok" disabled>${icon('trash')}${esc(okText)}</button></div>`);
+    let done = false;
+    m.onclose = () => { if (!done) resolve(false); };
+    const input = $('#cw-input', m);
+    const ok = $('#ok', m);
+    const hint = $('#cw-hint', m);
+    const check = () => {
+      const v = input.value.trim();
+      ok.disabled = v !== CONFIRM_WORD;
+      // Слово верное, но не заглавными — подсказываем, а не молчим
+      hint.textContent = v && v !== CONFIRM_WORD && v.toUpperCase() === CONFIRM_WORD ? 'Нужно заглавными буквами — включите Caps Lock' : '';
+    };
+    const confirm = () => { if (ok.disabled) return; done = true; closeModal(m); resolve(true); };
+    input.oninput = check;
+    input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); confirm(); } };
+    ok.onclick = confirm;
+    input.focus();
   });
 }
 
