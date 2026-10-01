@@ -52,7 +52,7 @@ const ICONS = {
   move: 'M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20',
   home: 'M4 11l8-7 8 7M6 9.5V20h12V9.5',
   pencil: 'M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4',
-  palette: 'M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.8 1.7-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H16a5 5 0 0 0 5-5c0-4-4-7.2-9-7.2zM7.5 11.5h.01M10 7.5h.01M14.5 7.5h.01M17 11h.01',
+  gear: 'M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
   arrowUp: 'M12 19V5M6 11l6-6 6 6',
   arrowDown: 'M12 5v14M6 13l6 6 6-6',
   bold: 'M7 5h5.5a3.5 3.5 0 0 1 0 7H7zM7 12h6.5a3.5 3.5 0 0 1 0 7H7z',
@@ -1644,10 +1644,12 @@ function renderTasks() {
     <div class="tasks-wrap ${S.taskView === 'board' ? 'wide' : ''}">
       <div class="tasks-head home-head">
         <div class="home-title">
-          <h1>Задачи</h1>
+          <div class="title-row">
+            <h1>Задачи</h1>
+            <button class="icon-btn head-gear" id="task-settings" title="Настройки задач" aria-label="Настройки задач">${icon('gear')}</button>
+          </div>
           <p class="home-sub" id="tasks-sub"></p>
         </div>
-        <button class="btn ghost" id="edit-statuses" title="Добавить, переименовать или перекрасить статусы">${icon('palette')}Статусы</button>
         <div class="segmented" role="tablist">
           <button data-view="list" class="${S.taskView === 'list' ? 'on' : ''}">${icon('list')}Список</button>
           <button data-view="board" class="${S.taskView === 'board' ? 'on' : ''}">${icon('board')}Доска</button>
@@ -1667,7 +1669,7 @@ function renderTasks() {
     $('.tasks-wrap').classList.toggle('wide', S.taskView === 'board');
     renderTasksBody();
   });
-  $('#edit-statuses').onclick = () => openStatusesDialog();
+  $('#task-settings').onclick = () => openStatusesDialog();
   $('#task-new').onclick = createTask;
   $('#task-select').onclick = () => {
     S.taskSelect = !S.taskSelect;
@@ -1743,7 +1745,7 @@ function renderTasksBody() {
       </section>`;
     }).join('')}</div>`;
   } else {
-    // Группы списка идут в том же порядке, что и колонки доски (порядок из окна «Статусы»)
+    // Группы списка идут в том же порядке, что и колонки доски (порядок из настроек задач)
     const order = S.statuses.map((x) => x.key);
     // Задачи со статусом, которого уже нет (удалён в другой вкладке), не должны пропасть из списка
     list.forEach((t) => { if (!order.includes(t.status)) order.push(t.status); });
@@ -2551,7 +2553,8 @@ function confirmTyped({ title, text, okText = 'Удалить' }) {
    ========================================================= */
 function openStatusesDialog({ focus = null } = {}) {
   const m = openModal(`
-    <h2>Статусы задач</h2>
+    <h2>Настройки задач</h2>
+    <h3 class="set-caption">Статусы</h3>
     <p>Статусы — это колонки на доске и группы в списке. «${esc(statusOf('todo').name)}» нельзя удалить — в него переходят задачи удалённого статуса, — но можно переименовать и перекрасить. Готовую задачу завершают кнопкой в её карточке, она попадает в блок «Завершённые».</p>
     <div class="st-list" id="st-list"></div>
     <div class="st-default">

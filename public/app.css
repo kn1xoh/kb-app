@@ -757,6 +757,13 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
 .tasks-wrap.wide { max-width: 1180px; }
 .tasks-head .home-title { flex: 1; }
 .tasks-head .home-title h1 { flex: none; }
+/* шестерёнка настроек раздела — рядом с заголовком */
+.title-row { display: flex; align-items: center; gap: 6px; }
+.head-gear { width: 32px; height: 32px; color: var(--faint); }
+.head-gear:hover { color: var(--fg); }
+.head-gear svg.i { width: 19px; height: 19px; }
+/* подпись блока в окне настроек — как подписи блоков в разделах */
+.set-caption { margin: 4px 0 -4px; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
 #tasks-body { display: grid; gap: 26px; }
 
 /* Фильтры: выбранный — как активный пункт в левой панели */
