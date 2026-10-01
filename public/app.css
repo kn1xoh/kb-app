@@ -94,6 +94,11 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .auth-brand { display: flex; align-items: center; gap: 12px; }
 .logo { width: 34px; height: 34px; border-radius: 9px; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; flex: none; }
 .logo svg.i { width: 18px; height: 18px; }
+.logo-mark { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-linecap: round; }
+.brand-name { font-weight: 600; letter-spacing: .16em; text-transform: uppercase; }
+.auth-brand .logo { width: 44px; height: 44px; border-radius: 12px; }
+.auth-brand .logo-mark { width: 30px; height: 30px; }
+.auth-brand .brand-name { font-size: 20px; }
 .auth h1 { font: 600 28px/1.2 var(--font-read); margin: 0; text-wrap: balance; }
 .auth p { margin: 0; color: var(--muted); }
 .auth form { display: grid; gap: 14px; }

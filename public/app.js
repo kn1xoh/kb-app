@@ -63,6 +63,8 @@ const ICONS = {
   chevronDown: 'M7 10l5 5 5-5',
   star: 'M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.75 1-5.8L3.5 9.7l5.9-.9z',
 };
+// Логотип Silo: вид сверху в шахту силоса — стена и винтовая лестница, уходящая вглубь
+const LOGO = `<svg class="logo-mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke-width="2"/><path d="M17.72 8.70A6.6 6.6 0 1 1 12.00 5.40" stroke-width="1.9" opacity=".85"/><path d="M12.00 15.30A3.3 3.3 0 1 1 15.30 12.00" stroke-width="1.9" opacity=".6"/></svg>`;
 const icon = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name]}"/></svg>`;
 
 // ---------- utils ----------
@@ -192,7 +194,7 @@ function renderAuth(setup = false) {
   $('#app').innerHTML = `
     <main class="auth">
       <div class="auth-card">
-        <div class="auth-brand"><div class="logo">${icon('book')}</div><b>База знаний</b></div>
+        <div class="auth-brand"><div class="logo">${LOGO}</div><b class="brand-name">Silo</b></div>
         <div style="display:grid;gap:6px">
           <h1>${setup ? 'Создайте аккаунт администратора' : 'Вход в аккаунт'}</h1>
           <p>${setup ? 'Это первый запуск. Администратор создаёт аккаунты для остальных пользователей.' : 'Аккаунт выдаёт администратор. Если забыли пароль, обратитесь к нему.'}</p>
@@ -242,8 +244,8 @@ function renderShell() {
     <div class="shell" id="shell">
       <aside class="sidebar" id="sidebar">
         <div class="side-head">
-          <div class="logo">${icon('book')}</div>
-          <span class="name">База знаний</span>
+          <div class="logo">${LOGO}</div>
+          <span class="name brand-name">Silo</span>
         </div>
         <button class="search-trigger" id="open-search">${icon('search')}<span>Поиск</span><span class="kbd">Ctrl K</span></button>
         <nav class="nav" id="nav">

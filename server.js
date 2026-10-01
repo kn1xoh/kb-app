@@ -595,4 +595,4 @@ app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }))
 app.use('/api', (req, res) => httpError(res, 404, 'Не найдено'));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-app.listen(PORT, () => console.log(`База знаний запущена: http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Silo запущен: http://localhost:${PORT}`));
