@@ -622,7 +622,15 @@ async function route() {
   if (section !== 'notes' || id) { S.selectMode = false; S.selected.clear(); }
   S.taskSelect = false;
   S.taskSelected.clear();
-  if (section === 'tasks') return renderTasks();
+  if (section === 'tasks') {
+    renderTasks();
+    // задачу из поиска открываем, когда раздел уже на экране (уход с заметки может занять время)
+    const open = S.openTaskAfterRoute;
+    S.openTaskAfterRoute = null;
+    if (open) openTaskPanel(open);
+    return;
+  }
+  S.openTaskAfterRoute = null;
   if (section === 'notes' && id) return openPage(Number(id));
   return renderNotesHome();
 }
@@ -959,7 +967,7 @@ function renderNotesHome() {
       <div class="toc-head">
         <h3>Все заметки</h3>
         <span class="outline-tools">
-          <button class="btn ghost" id="toggle-all">${anyOpen ? 'Свернуть всё' : 'Развернуть всё'}</button>
+          ${S.pages.some((p) => p.parent_id) ? `<button class="btn ghost" id="toggle-all">${anyOpen ? 'Свернуть всё' : 'Развернуть всё'}</button>` : ''}
           <button class="btn ghost ${S.selectMode ? 'on' : ''}" id="select-mode">${S.selectMode ? 'Готово' : 'Выбрать'}</button>
         </span>
       </div>
@@ -1021,7 +1029,7 @@ function renderNotesHome() {
     };
     $('#sel-delete').onclick = bulkDelete;
   }
-  $('#toggle-all').onclick = () => {
+  if ($('#toggle-all')) $('#toggle-all').onclick = () => {
     if (anyOpen) homeExpanded.clear();
     else S.pages.forEach((p) => { if (childrenOf(p.id).length) homeExpanded.add(p.id); });
     saveHomeExpanded();
@@ -1186,6 +1194,7 @@ async function flushPageSave() {
     const r = await api('PATCH', `/api/pages/${id}`, data);
     const p = pageById(id);
     if (p) { p.updated_at = r.updated_at; }
+    if (S.page?.id === id) { const meta = $('#page-changed'); if (meta) meta.textContent = `Изменено ${ago(r.updated_at)}`; }
     setSaveState('Сохранено');
   } catch (e) {
     setSaveState('Не сохранено');
@@ -1260,7 +1269,7 @@ async function openPage(id) {
     ${topbar('<nav class="crumbs" id="crumbs"></nav><span class="save-state" id="save-state"></span><button class="icon-btn fav-btn" id="page-fav"></button><button class="icon-btn" id="page-more" aria-label="Действия с заметкой">' + icon('more') + '</button>')}
     <article class="page">
       <textarea class="page-title" id="page-title" rows="1" placeholder="Без названия" maxlength="300">${esc(page.title)}</textarea>
-      <div class="page-meta"><span id="page-num"></span>Изменено ${ago(page.updated_at)}</div>
+      <div class="page-meta"><span id="page-num"></span><span id="page-changed">Изменено ${ago(page.updated_at)}</span></div>
       <div id="toolbar-slot"></div>
       <div class="editor" id="editor" contenteditable="true" data-placeholder="Начните писать…">${page.content}</div>
       <section class="subpages" id="subpages"></section>
@@ -1363,7 +1372,7 @@ function renderSubpages() {
       const hidden = depth === 1 ? descendants(k.id).length : 0;
       return `<li><a class="toc-row depth-${depth}" href="#/notes/${k.id}" draggable="true" data-id="${k.id}">
         ${numOrIcon(nums, k.id, 'toc-num')}
-        <span class="toc-title">${esc(titleOf(k))}</span>
+        <span class="toc-title ${k.title.trim() ? '' : 'untitled'}">${esc(titleOf(k))}</span>
         <span class="toc-meta">${hidden ? `ещё ${hidden} внутри · ` : ''}${ago(k.updated_at)}</span>
       </a></li>`;
     }).join('')}</ol>`
@@ -2437,7 +2446,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
       <div class="props">
         <span>Статус</span>
         ${done
-          ? `<span class="prop-text done-state" title="${esc(ago(t.completed_at))}">${icon('check')}Завершена<span class="muted">· ${esc(fullDateTime(t.completed_at))}</span></span>`
+          ? `<span class="prop-text done-state" title="${esc(ago(t.completed_at))}">${icon('check')}Завершена<span class="muted"><span class="ds-sep">· </span>${esc(fullDateTime(t.completed_at))}</span></span>`
           : `<select id="tp-status">${S.statuses.map((st) => `<option value="${st.key}" ${t.status === st.key ? 'selected' : ''}>${esc(st.name)}</option>`).join('')}</select>`}
         <span>Приоритет</span>
         <select id="tp-prio">${Object.entries(PRIORITY).map(([k, v]) => `<option value="${k}" ${t.priority === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
@@ -2599,7 +2608,9 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     if (S.tasks.includes(t)) deleteTasks([t.id]);
   };
   // Только что созданная задача — курсор сразу в название
-  if (justCreated || !t.description) setTimeout(() => title.focus(), 50);
+  // на телефоне курсор ставим только в новую задачу — иначе при каждом открытии выезжает клавиатура
+  const touch = matchMedia('(pointer: coarse)').matches;
+  if (justCreated || (!touch && !t.description)) setTimeout(() => title.focus(), 50);
 }
 
 /* =========================================================
@@ -2646,9 +2657,10 @@ function openSearch() {
     if (!it) return;
     closeModal(m);
     if (typeof it === 'string') location.hash = it;
+    else if (location.hash.startsWith('#/tasks')) openTaskPanel(it.task);
     else {
-      if (!location.hash.startsWith('#/tasks')) location.hash = '#/tasks';
-      setTimeout(() => openTaskPanel(it.task), 150);
+      S.openTaskAfterRoute = it.task;
+      location.hash = '#/tasks';
     }
   };
   const recent = () => {
@@ -2734,7 +2746,7 @@ function openDatePicker(anchor, value, onPick) {
     ['Завтра', addDays(today, 1)],
     ['В понедельник', addDays(today, 7 - dow)],
     ['Через неделю', addDays(today, 7)],
-  ];
+  ].filter(([l, d], i, all) => l !== 'В понедельник' || !all.some(([, x], j) => j !== i && ymd(x) === ymd(d))); // в вс и пн «В понедельник» совпадает с «Завтра» / «Через неделю»
   const base = value ? new Date(value + 'T00:00') : today;
   let year = base.getFullYear(), month = base.getMonth();
   let focusDay = value || tStr;
@@ -2884,9 +2896,18 @@ function openModal(html, cls = '') {
   ov.onclick = () => closeModal(m);
   m.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) closeModal(m); });
   m.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeModal(m); } });
+  // фокус внутрь окна, чтобы Esc и Tab работали сразу (окно может открыться из меню, когда фокус где-то снаружи)
+  m.tabIndex = -1;
+  requestAnimationFrame(() => { if (m.isConnected && !m.contains(document.activeElement)) m.focus({ preventScroll: true }); });
   return m;
 }
 function closeModal(m) { m.overlay?.remove(); m.remove(); m.onclose?.(); }
+// Esc закрывает верхнее окно, даже если фокус остался снаружи (например, на кнопке, которая его открыла)
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.defaultPrevented) return;
+  const top = $$('.modal').pop();
+  if (top && !top.contains(e.target)) { e.stopPropagation(); closeModal(top); }
+}, true);
 function closeOverlays(keepNothing) {
   closeMenus();
   $$('.modal').forEach(closeModal);

@@ -1051,3 +1051,47 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
 }
 /* плавающая «+» не перекрывает открытое окно */
 body:has(.modal) .fab { display: none; }
+
+/* ---------- полировка (2 окт 2026) ---------- */
+.modal:focus { outline: none; }
+/* пустая строка ошибки не оставляет дыру над кнопкой */
+.modal .error-text:empty { display: none; }
+/* поля в окне «Аккаунт» — на всю ширину окна, как остальные блоки */
+.set-block .field { max-width: none; }
+/* тема в меню пользователя — подписи в одну строку */
+.menu:has(.seg) { min-width: 280px; }
+.menu .seg button { white-space: nowrap; }
+/* звёздочка избранного по центру строки, а не над текстом */
+.task-row .t-title .mini-star, .card .c-title .mini-star { vertical-align: -2px; }
+/* уведомление не закрывает панель «Выбрано: …» */
+body:has(.bulk-bar) #toasts { bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+/* в режиме «Выбрать» строки заметок не меняют высоту и дата не съезжает */
+.outline.selecting .outline-row { grid-template-columns: 20px 22px auto 1fr auto auto; }
+.outline.selecting .row-add { display: inline-flex; visibility: hidden; pointer-events: none; }
+/* «Завершена · дата»: при переносе дата уходит целиком, без висящей точки */
+.done-state .muted { white-space: nowrap; }
+@media (max-width: 600px) {
+  .done-state { gap: 2px 6px; }
+  .done-state .muted { flex-basis: 100%; padding-left: 22px; }
+  .done-state .ds-sep { display: none; }
+}
+/* календарь на телефоне помещается в экран: у дней нет внутренних отступов меню */
+.dp-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.dp-quick { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 860px), (pointer: coarse) {
+  .datepicker .dp-day { padding: 0; }
+  .datepicker .dp-quick button { min-width: 0; }
+}
+/* настройки статусов на телефоне: названию больше места */
+@media (max-width: 600px) {
+  .modal { padding: 18px; }
+  .st-row { gap: 4px; }
+  .st-count { display: none; }
+}
+@media (max-width: 860px) { body:has(.bulk-bar) #toasts { bottom: calc(140px + env(safe-area-inset-bottom, 0px)); } }
+.dp-quick button:last-child:nth-child(odd) { grid-column: span 2; }
+/* уведомления на телефоне не сжимаются в узкий столбик и стоят по центру */
+#toasts { width: max-content; max-width: calc(100vw - 32px); justify-items: center; }
+/* телефон: подсказка «Esc» в поиске не нужна (и обрезалась), «+» не висит поверх открытого меню */
+@media (max-width: 860px), (pointer: coarse) { .palette-input .kbd { display: none; } }
+.shell.nav-open .fab { display: none; }
