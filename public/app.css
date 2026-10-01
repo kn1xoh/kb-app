@@ -284,7 +284,7 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .due.today { color: var(--accent); font-weight: 500; }
 
 .board {
-  display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(220px, 1fr)) auto; gap: 16px; align-items: start;
+  display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(220px, 1fr)); gap: 16px; align-items: start;
   overflow-x: auto; padding-bottom: 6px;
 }
 .column { background: var(--sidebar); border: 1px solid var(--line); border-radius: 12px; padding: 10px; display: grid; gap: 8px; min-height: 160px; align-content: start; }
@@ -298,11 +298,6 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .column:hover .col-edit, .col-edit:focus-visible { opacity: 1; }
 .col-edit:hover { color: var(--fg); }
 @media (hover: none) { .column-head .col-edit { opacity: 1; } }
-.add-status {
-  display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 14px; border: 1px dashed var(--line);
-  border-radius: 12px; background: none; color: var(--muted); font-size: 14px; white-space: nowrap;
-}
-.add-status:hover { color: var(--accent); border-color: var(--accent); }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; display: grid; gap: 8px; cursor: grab; }
 .card:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .card.dragging { opacity: .4; }
@@ -393,7 +388,6 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
   .tasks-wrap { padding: 4px 16px 80px; }
   .tasks-head h1 { font-size: 26px; }
   .board { grid-template-columns: 1fr; overflow-x: visible; }
-  .add-status { justify-content: center; }
   .task-row { grid-template-columns: auto 1fr; }
   .task-row .t-meta { grid-column: 2; }
   .tree-actions { display: flex; }

@@ -1253,7 +1253,7 @@ function renderTasksBody() {
         ${items.map(taskCard).join('') || '<div class="col-empty">Перетащите сюда задачу</div>'}
         <button class="add-inline" data-add="${s}">${icon('plus')}Добавить</button>
       </section>`;
-    }).join('')}<button class="add-status" data-new-status>${icon('plus')}Статус</button></div>`;
+    }).join('')}</div>`;
     setupBoardDnD(body);
   } else {
     // В списке сначала задачи в работе (все статусы, кроме встроенных), затем «Нужно сделать», в конце «Готово»
@@ -1317,12 +1317,8 @@ $('#app').addEventListener('click', async (e) => {
     input.onkeydown = (ev) => { if (ev.key === 'Escape') renderTasksBody(); };
     return;
   }
-  const editSt = e.target.closest('[data-edit-status], [data-new-status]');
-  if (editSt) {
-    if (editSt.dataset.newStatus !== undefined) openStatusesDialog({ create: true });
-    else openStatusesDialog({ focus: editSt.dataset.editStatus });
-    return;
-  }
+  const editSt = e.target.closest('[data-edit-status]');
+  if (editSt) { openStatusesDialog({ focus: editSt.dataset.editStatus }); return; }
   const row = e.target.closest('[data-task]');
   if (row && !row.classList.contains('dragging')) openTaskPanel(Number(row.dataset.task));
 });
@@ -1649,7 +1645,7 @@ function confirmDialog({ title, text, okText = 'Ок', danger = false }) {
 /* =========================================================
    Статусы задач: добавить, переименовать, перекрасить, поменять порядок, удалить
    ========================================================= */
-function openStatusesDialog({ create = false, focus = null } = {}) {
+function openStatusesDialog({ focus = null } = {}) {
   const m = openModal(`
     <h2>Статусы задач</h2>
     <p>Статусы — это колонки на доске и группы в списке. «${esc(statusOf('todo').name)}» и «${esc(statusOf('done').name)}» нельзя удалить: в первый попадают новые задачи, во второй — отмеченные галочкой. Их можно переименовать и перекрасить.</p>
@@ -1777,8 +1773,7 @@ function openStatusesDialog({ create = false, focus = null } = {}) {
   $('#st-add', m).onclick = addStatus;
 
   draw();
-  if (create) addStatus();
-  else if (focus) focusName(focus, true);
+  if (focus) focusName(focus, true);
 }
 
 function genPassword() {
