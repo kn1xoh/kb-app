@@ -1690,9 +1690,8 @@ function renderTasksBody() {
       </section>`;
     }).join('')}</div>`;
   } else {
-    // В списке сначала задачи в работе (все статусы, кроме «Нужно сделать»), затем «Нужно сделать»
-    const keys = S.statuses.map((x) => x.key);
-    const order = [...keys.filter((k) => k !== 'todo'), 'todo'];
+    // Группы списка идут в том же порядке, что и колонки доски (порядок из окна «Статусы»)
+    const order = S.statuses.map((x) => x.key);
     // Задачи со статусом, которого уже нет (удалён в другой вкладке), не должны пропасть из списка
     list.forEach((t) => { if (!order.includes(t.status)) order.push(t.status); });
     const groups = order.map((s) => ({ s, items: byStatus(s) })).filter((g) => g.items.length);
