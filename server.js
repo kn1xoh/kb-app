@@ -242,6 +242,38 @@ app.post('/api/me/keys', auth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Имя и email (email — это логин). Имя меняется сразу; для смены email нужен текущий пароль —
+// браузер присылает auth, выведенный из него, как при входе
+app.patch('/api/me', auth, async (req, res) => {
+  const b = req.body || {};
+  const u = req.user;
+  let name = u.name;
+  let email = u.email;
+  if (b.name !== undefined) {
+    name = String(b.name).replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!name) return httpError(res, 400, 'Напишите, как вас зовут');
+  }
+  if (b.email !== undefined && normEmail(b.email) !== u.email) {
+    email = normEmail(b.email);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return httpError(res, 400, 'Укажите корректный email');
+    const key = `me|${u.id}`;
+    if (tooManyAttempts(key)) return httpError(res, 429, 'Слишком много попыток. Попробуйте через 15 минут');
+    if (!u.password_hash || !bcrypt.compareSync(String(b.auth || ''), u.password_hash)) {
+      failAttempt(key);
+      return httpError(res, 400, 'Неверный пароль');
+    }
+    attempts.delete(key);
+    if (await findUser(email)) return httpError(res, 400, 'Аккаунт с таким email уже есть');
+  }
+  try {
+    await db.run('UPDATE users SET name = ?, email = ? WHERE id = ?', name, email, u.id);
+  } catch (e) {
+    if (/UNIQUE/i.test(String(e.message))) return httpError(res, 400, 'Аккаунт с таким email уже есть');
+    throw e;
+  }
+  res.json({ user: publicUser({ ...u, name, email }) });
+});
+
 // ---------- восстановление пароля по коду (без участия администратора) ----------
 
 async function checkRecovery(req, res) {

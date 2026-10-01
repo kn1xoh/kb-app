@@ -1041,3 +1041,5 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
   .modal .inv-form { flex-direction: column; }
   .inv-row { flex-direction: column; align-items: stretch; }
 }
+/* плавающая «+» не перекрывает открытое окно */
+body:has(.modal) .fab { display: none; }

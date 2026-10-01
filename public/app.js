@@ -35,6 +35,7 @@ const ICONS = {
   menu: 'M4 6h16M4 12h16M4 18h16',
   sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
   logout: 'M9 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3M16 17l5-5-5-5M21 12H9',
+  user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM5 20v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1',
   key: 'M14.5 4a5.5 5.5 0 1 1-4.9 8L4 17.6V20h3v-2h2v-2h2l.6-.6A5.5 5.5 0 0 1 14.5 4zM16 8h.01',
   users: 'M16 20v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9.5 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM21 20v-1a4 4 0 0 0-3-3.9M16 4.1a3.5 3.5 0 0 1 0 6.8',
   list: 'M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01',
@@ -2801,7 +2802,7 @@ function openUserMenu(anchor) {
     <div class="menu-label">Тема</div>
     <div class="seg">${seg('system', 'Как в системе')}${seg('light', 'Светлая')}${seg('dark', 'Тёмная')}</div>
     <hr>
-    <button data-m="password">${icon('key')}Пароль и код восстановления</button>
+    <button data-m="account">${icon('user')}Аккаунт</button>
     ${S.user.is_admin ? `<button data-m="users">${icon('users')}Пользователи</button>` : ''}
     <hr>
     <button data-m="logout">${icon('logout')}Выйти</button>`, async (m, btn) => {
@@ -2809,7 +2810,7 @@ function openUserMenu(anchor) {
       applyTheme(m.slice(6));
       $$('.seg button', btn.closest('.menu')).forEach((b) => b.classList.toggle('on', b === btn));
     }
-    if (m === 'password') openPasswordDialog();
+    if (m === 'account') openAccountDialog();
     if (m === 'users') openUsersDialog();
     if (m === 'logout') {
       await flushPageSave();
@@ -3063,11 +3064,79 @@ function openStatusesDialog({ focus = null } = {}) {
   if (focus) focusName(focus, true);
 }
 
-// Пароль и код восстановления. Старый пароль не нужен: на этом устройстве ключ шифрования уже есть,
+// Имя и email (email — это логин). Для смены email просим текущий пароль: из него, как при входе,
+// выводится auth, сервер сверяет его. Ключ шифрования от email не зависит — заметки остаются доступны
+const profileBlock = () => `
+  <form id="pf-form" class="set-block" novalidate>
+    <div class="set-caption">Имя и email</div>
+    <label class="field"><span>Имя</span><input class="input" id="pf-name" maxlength="80" autocomplete="name" value="${esc(S.user.name || '')}"></label>
+    <label class="field"><span>Email — логин для входа</span><input class="input" id="pf-email" type="email" autocomplete="username" value="${esc(S.user.email)}"></label>
+    <label class="field" id="pf-pass-row" hidden><span>Текущий пароль — нужен, чтобы сменить email</span><input class="input" id="pf-pass" type="password" autocomplete="current-password"></label>
+    <p class="error-text" id="pf-err"></p>
+    <div><button class="btn primary" id="pf-save" disabled>Сохранить</button></div>
+  </form>`;
+
+function bindProfile(m) {
+  const name = $('#pf-name', m);
+  const email = $('#pf-email', m);
+  const pass = $('#pf-pass', m);
+  const save = $('#pf-save', m);
+  const norm = (v) => v.trim().toLowerCase();
+  const sync = () => {
+    const emailChanged = norm(email.value) !== S.user.email;
+    $('#pf-pass-row', m).hidden = !emailChanged;
+    save.disabled = !emailChanged && name.value.replace(/\s+/g, ' ').trim() === (S.user.name || '');
+    $('#pf-err', m).textContent = '';
+  };
+  name.oninput = email.oninput = sync;
+  $('#pf-form', m).onsubmit = async (e) => {
+    e.preventDefault();
+    const body = { name: name.value };
+    const err = $('#pf-err', m);
+    err.textContent = '';
+    if (!name.value.trim()) { err.textContent = 'Напишите, как вас зовут'; return name.focus(); }
+    if (norm(email.value) !== S.user.email) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(norm(email.value))) { err.textContent = 'Укажите корректный email'; return email.focus(); }
+      if (!pass.value) { err.textContent = 'Введите текущий пароль'; return pass.focus(); }
+      body.email = email.value;
+    }
+    save.disabled = true;
+    save.textContent = 'Сохранение…';
+    try {
+      if (body.email) {
+        const pre = await api('POST', '/api/prelogin', { email: S.user.email });
+        body.auth = (await Vault.login(pass.value, pre.salt)).auth;
+      }
+      const { user } = await api('PATCH', '/api/me', body);
+      S.user = { ...S.user, ...user };
+      name.value = user.name;
+      email.value = user.email;
+      pass.value = '';
+      updateUserBtn();
+      toast(body.email ? 'Email изменён — входите с новым' : 'Имя изменено');
+    } catch (ex) { err.textContent = ex.message; }
+    save.textContent = 'Сохранить';
+    const msg = err.textContent;
+    sync();
+    err.textContent = msg;
+  };
+}
+
+function updateUserBtn() {
+  const u = S.user;
+  const b = $('#user-btn');
+  if (!b) return;
+  $('.avatar', b).textContent = (u.name || u.email).trim()[0]?.toUpperCase() || '?';
+  $('.who b', b).textContent = u.name || u.email;
+  $('.who small', b).textContent = u.email;
+}
+
+// Аккаунт: имя и email, пароль, код восстановления. Старый пароль для смены пароля не нужен: на этом устройстве ключ шифрования уже есть,
 // так что, если пароль забыт, его можно сменить там, где вы уже вошли.
-function openPasswordDialog() {
+function openAccountDialog() {
   const m = openModal(`
-    <h2>Пароль и код восстановления</h2>
+    <h2>Аккаунт</h2>
+    ${profileBlock()}
     <form id="pw-form" class="set-block">
       <div class="set-caption">Новый пароль</div>
       <label class="field"><span>Новый пароль (не короче ${MIN_PASSWORD} символов)</span><input class="input" type="password" id="pw-new" autocomplete="new-password"></label>
@@ -3082,7 +3151,7 @@ function openPasswordDialog() {
       <div><button class="btn" id="rc-new">Создать новый код</button></div>
     </div>
     <div class="modal-actions"><button type="button" class="btn" data-close>Готово</button></div>`);
-  $('#pw-new', m).focus();
+  bindProfile(m);
   $('#pw-form', m).onsubmit = async (e) => {
     e.preventDefault();
     const btn = $('#pw-form .btn.primary', m);
