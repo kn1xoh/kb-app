@@ -1311,10 +1311,8 @@ function renderTasksBody() {
     body.innerHTML = `<div class="board" style="--cols:${S.statuses.length}">${S.statuses.map(({ key: s }) => {
       const items = byStatus(s);
       return `<section class="column" data-status="${s}">
-        <div class="column-head"><span class="dot" style="background:${statusColor(s)}"></span><span class="col-name">${esc(statusOf(s).name)}</span><span class="kids-n">${items.length}</span>
-          <button class="icon-btn col-edit" data-edit-status="${s}" title="Изменить статус" aria-label="Изменить статус">${icon('pencil')}</button></div>
+        <div class="column-head"><span class="dot" style="background:${statusColor(s)}"></span><span class="col-name">${esc(statusOf(s).name)}</span><span class="kids-n">${items.length}</span></div>
         ${items.map(taskCard).join('') || '<div class="col-empty">Перетащите сюда задачу</div>'}
-        <button class="add-inline" data-add="${s}">${icon('plus')}Добавить</button>
       </section>`;
     }).join('')}</div>`;
     setupBoardDnD(body);
@@ -1358,31 +1356,6 @@ $('#app').addEventListener('click', async (e) => {
     await updateTask(t, { status: t.status === 'done' ? 'todo' : 'done' });
     return;
   }
-  const add = e.target.closest('[data-add]');
-  if (add) {
-    const status = add.dataset.add;
-    const form = document.createElement('form');
-    form.innerHTML = `<input class="input" placeholder="Название и Enter" maxlength="300">`;
-    add.replaceWith(form);
-    const input = $('input', form);
-    input.focus();
-    form.onsubmit = async (ev) => {
-      ev.preventDefault();
-      if (!input.value.trim()) return;
-      try {
-        const t = await api('POST', '/api/tasks', { title: input.value.trim(), status });
-        S.tasks.push(t);
-        updateCounts();
-        renderTasksBody();
-        openTaskPanel(t.id, { justCreated: true });
-      } catch (err) { fail(err); }
-    };
-    input.onblur = () => setTimeout(() => { if (document.contains(form) && !input.value.trim()) renderTasksBody(); }, 150);
-    input.onkeydown = (ev) => { if (ev.key === 'Escape') renderTasksBody(); };
-    return;
-  }
-  const editSt = e.target.closest('[data-edit-status]');
-  if (editSt) { openStatusesDialog({ focus: editSt.dataset.editStatus }); return; }
   const row = e.target.closest('[data-task]');
   if (row && !row.classList.contains('dragging')) openTaskPanel(Number(row.dataset.task));
 });
@@ -1428,7 +1401,7 @@ function setupBoardDnD(root) {
     const cards = $$('.card:not(.dragging)', col);
     const after = cards.find((c) => { const r = c.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
     if (after) col.insertBefore(ph, after);
-    else col.insertBefore(ph, $('[data-add]', col));
+    else col.appendChild(ph);
   });
   root.addEventListener('drop', async (e) => {
     const col = e.target.closest('.column');
