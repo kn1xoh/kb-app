@@ -1559,14 +1559,15 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-label', 'Задача');
   panel.innerHTML = `
-    <div class="panel-head">
-      <span class="muted">Задача</span>
-      <button class="icon-btn fav-btn" id="tp-fav" data-id="${t.id}"></button>
-      <button class="icon-btn" id="tp-delete" title="Удалить задачу" aria-label="Удалить задачу">${icon('trash')}</button>
-      <button class="icon-btn" id="tp-close" title="Закрыть (Esc)" aria-label="Закрыть">${icon('x')}</button>
-    </div>
     <div class="panel-body">
-      <textarea class="page-title" id="tp-title" rows="1" maxlength="300" placeholder="Название задачи">${esc(t.title)}</textarea>
+      <div class="tp-head">
+        <textarea class="page-title" id="tp-title" rows="1" maxlength="300" placeholder="Название задачи">${esc(t.title)}</textarea>
+        <div class="tp-actions">
+          <button class="icon-btn fav-btn" id="tp-fav" data-id="${t.id}"></button>
+          <button class="icon-btn" id="tp-delete" title="Удалить задачу" aria-label="Удалить задачу">${icon('trash')}</button>
+          <button class="icon-btn" id="tp-close" title="Закрыть (Esc)" aria-label="Закрыть">${icon('x')}</button>
+        </div>
+      </div>
       <div class="props">
         <span>Статус</span>
         <select id="tp-status">${S.statuses.map((st) => `<option value="${st.key}" ${t.status === st.key ? 'selected' : ''}>${esc(st.name)}</option>`).join('')}</select>
