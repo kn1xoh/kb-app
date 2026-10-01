@@ -14,7 +14,7 @@ const STATUS_COLORS = {
   gray: 'Серый', green: 'Зелёный', teal: 'Бирюзовый', blue: 'Синий', indigo: 'Индиго', purple: 'Фиолетовый',
   pink: 'Розовый', red: 'Красный', orange: 'Оранжевый', yellow: 'Жёлтый', brown: 'Коричневый',
 };
-// Статусы задач пользователя (S.statuses). todo и done — встроенные: новые задачи и «галочка»
+// Статусы задач пользователя (S.statuses). todo — встроенный: в него уходят задачи удалённого статуса
 const statusOf = (key) => S.statuses.find((s) => s.key === key) || { key, name: 'Без статуса', color: 'gray' };
 const statusColor = (key) => `var(--st-${statusOf(key).color})`;
 const PRIORITY = { high: 'Высокий', medium: 'Средний', low: 'Низкий' };
@@ -165,6 +165,12 @@ const S = {
   selected: new Set(),
   trash: null, // «Недавно удалённые» заметки: { days, items }, null — ещё не загружено
   trashOpen: store.get('kb-trash-open', false),
+  taskSelect: false, // режим «Выбрать» в Задачах
+  taskSelected: new Set(),
+  taskTrash: null, // «Недавно удалённые» задачи: { days, items }
+  taskTrashOpen: store.get('kb-task-trash-open', false),
+  doneOpen: store.get('kb-done-open', false), // блок «Завершённые» развёрнут
+  doneAll: false,
 };
 const saveExpanded = () => store.set('kb-expanded', [...S.expanded]);
 
@@ -281,14 +287,14 @@ function updateFab() {
   fab.innerHTML = icon('plus');
   fab.setAttribute('aria-label', label);
   fab.title = label;
-  fab.hidden = S.section === 'notes' && S.selectMode;
+  fab.hidden = (S.section === 'notes' && S.selectMode) || (S.section === 'tasks' && S.taskSelect);
 }
 
 function closeNav() { $('#shell')?.classList.remove('nav-open'); }
 const topbar = (inner, cls = '') => `<div class="topbar ${cls}"><button class="icon-btn menu-toggle" data-act="nav" aria-label="Меню">${icon('menu')}</button>${inner}</div>`;
 
 function updateCounts() {
-  const open = S.tasks.filter((t) => t.status !== 'done').length;
+  const open = S.tasks.filter((t) => !isDone(t)).length;
   const el = $('#count-tasks');
   if (el) el.textContent = open || '';
   const n = $('#count-notes');
@@ -317,6 +323,8 @@ async function route() {
   if (S.page && !(section === 'notes' && Number(id) === S.page.id)) await finalizePage(S.page.id);
   closeOverlays(true);
   if (section !== 'notes' || id) { S.selectMode = false; S.selected.clear(); }
+  S.taskSelect = false;
+  S.taskSelected.clear();
   if (section === 'tasks') return renderTasks();
   if (section === 'notes' && id) return openPage(Number(id));
   return renderNotesHome();
@@ -365,7 +373,7 @@ function renderTree() {
   if (tasksMode) {
     const favs = S.tasks.filter((t) => t.favorite_at).sort(byAdded);
     box.innerHTML = favs.map((t) => `
-      <div class="fav-row ${t.status === 'done' ? 'done' : ''}" data-fav-task="${t.id}" role="button" tabindex="0">
+      <div class="fav-row ${isDone(t) ? 'done' : ''}" data-fav-task="${t.id}" role="button" tabindex="0">
         <span class="fav-dot" style="background:${statusColor(t.status)}" title="${esc(statusOf(t.status).name)}"></span>
         <span class="fav-title">${esc(taskTitle(t))}</span>${unfav}
       </div>`).join('')
@@ -1559,11 +1567,14 @@ function cleanHTML(html) {
 /* =========================================================
    Tasks
    ========================================================= */
+// Завершённая задача — отдельный признак completed_at, а не статус: статус сохраняется, чтобы вернуть задачу на место
+const isDone = (t) => !!t.completed_at;
+const taskById = (id) => S.tasks.find((t) => t.id === id);
 const FILTERS = [
-  { id: 'all', title: 'Все', test: () => true },
-  { id: 'today', title: 'На сегодня', test: (t) => t.status !== 'done' && t.due_date && t.due_date <= todayStr() },
-  { id: 'overdue', title: 'Просроченные', test: (t) => t.status !== 'done' && t.due_date && t.due_date < todayStr() },
-  { id: 'high', title: 'Высокий приоритет', test: (t) => t.priority === 'high' && t.status !== 'done' },
+  { id: 'all', title: 'Все', test: (t) => !isDone(t) },
+  { id: 'today', title: 'На сегодня', test: (t) => !isDone(t) && t.due_date && t.due_date <= todayStr() },
+  { id: 'overdue', title: 'Просроченные', test: (t) => !isDone(t) && t.due_date && t.due_date < todayStr() },
+  { id: 'high', title: 'Высокий приоритет', test: (t) => !isDone(t) && t.priority === 'high' },
 ];
 
 function renderTasks() {
@@ -1585,7 +1596,10 @@ function renderTasks() {
         </div>
         <button class="btn primary head-new" id="task-new">${icon('plus')}Новая задача</button>
       </div>
-      <div class="filters" id="filters"></div>
+      <div class="filters-row">
+        <div class="filters" id="filters"></div>
+        <button class="btn ghost" id="task-select"></button>
+      </div>
       <div id="tasks-body"></div>
     </div>`;
   $$('[data-view]').forEach((b) => b.onclick = () => {
@@ -1597,6 +1611,12 @@ function renderTasks() {
   });
   $('#edit-statuses').onclick = () => openStatusesDialog();
   $('#task-new').onclick = createTask;
+  $('#task-select').onclick = () => {
+    S.taskSelect = !S.taskSelect;
+    S.taskSelected.clear();
+    renderTasksBody();
+  };
+  bindTasksBody($('#tasks-body'));
   renderTasksBody();
 }
 
@@ -1614,93 +1634,287 @@ async function createTask() {
       location.hash = '#/tasks';
       await new Promise((r) => setTimeout(r, 0));
     }
+    S.taskSelect = false;
+    S.taskSelected.clear();
     renderTasksBody();
     updateCounts();
     openTaskPanel(t.id, { justCreated: true });
   } catch (err) { fail(err); } finally { creatingTask = false; }
 }
 const taskTitle = (t) => t.title.trim() || 'Без названия';
+const refreshTasks = () => { renderTasksBody(); renderTree(); updateCounts(); };
+
+const DONE_PAGE = 20; // сколько завершённых показывать, пока не нажали «Показать все»
 
 function renderTasksBody() {
   const body = $('#tasks-body');
   if (!body) return;
+  updateFab();
   const total = S.tasks.length;
-  const doneN = S.tasks.filter((t) => t.status === 'done').length;
+  const doneN = S.tasks.filter(isDone).length;
   $('#tasks-sub').textContent = total
-    ? `${total} ${plural(total, 'задача', 'задачи', 'задач')}${doneN ? ` · ${doneN} ${plural(doneN, 'выполнена', 'выполнены', 'выполнено')}` : ''}` : '';
+    ? `${total} ${plural(total, 'задача', 'задачи', 'задач')}${doneN ? ` · ${doneN} ${plural(doneN, 'завершена', 'завершены', 'завершено')}` : ''}` : '';
   $('#filters').innerHTML = FILTERS.map((f) => {
     const n = S.tasks.filter(f.test).length;
     return `<button class="chip ${S.taskFilter === f.id ? 'on' : ''}" data-filter="${f.id}">${f.title}<span class="n">${n}</span></button>`;
   }).join('');
-  $$('[data-filter]').forEach((b) => b.onclick = () => { S.taskFilter = b.dataset.filter; renderTasksBody(); });
+  $$('[data-filter]').forEach((b) => b.onclick = () => { S.taskFilter = b.dataset.filter; S.taskSelected.clear(); renderTasksBody(); });
+  const selBtn = $('#task-select');
+  selBtn.textContent = S.taskSelect ? 'Готово' : 'Выбрать';
+  selBtn.classList.toggle('on', S.taskSelect);
+  selBtn.hidden = !total;
+
+  if (!total) {
+    S.taskSelect = false;
+    body.innerHTML = `<div class="empty" style="margin-top:6vh"><h2>Задач пока нет</h2><p>Нажмите «Новая задача», чтобы добавить первую.</p></div>${taskTrashSection()}`;
+    if (S.taskTrash === null && S.taskTrashOpen) loadTaskTrash();
+    return;
+  }
 
   const filter = FILTERS.find((f) => f.id === S.taskFilter);
   const list = S.tasks.filter(filter.test);
   const byStatus = (s) => list.filter((t) => t.status === s).sort((a, b) => a.position - b.position || b.id - a.id);
-
-  if (!S.tasks.length) {
-    body.innerHTML = `<div class="empty" style="margin-top:6vh"><h2>Задач пока нет</h2><p>Нажмите «Новая задача», чтобы добавить первую.</p></div>`;
-    return;
-  }
-
+  let main;
   if (S.taskView === 'board') {
-    body.innerHTML = `<div class="board" style="--cols:${S.statuses.length}">${S.statuses.map(({ key: s }) => {
+    main = `<div class="board ${S.taskSelect ? 'selecting' : ''}" style="--cols:${S.statuses.length}">${S.statuses.map(({ key: s }) => {
       const items = byStatus(s);
       return `<section class="column" data-status="${s}">
         <div class="column-head"><span class="dot" style="background:${statusColor(s)}"></span><span class="col-name">${esc(statusOf(s).name)}</span><span class="kids-n">${items.length}</span></div>
         ${items.map(taskCard).join('') || '<div class="col-empty">Перетащите сюда задачу</div>'}
       </section>`;
     }).join('')}</div>`;
-    setupBoardDnD(body);
   } else {
-    // В списке сначала задачи в работе (все статусы, кроме встроенных), затем «Нужно сделать», в конце «Готово»
+    // В списке сначала задачи в работе (все статусы, кроме «Нужно сделать»), затем «Нужно сделать»
     const keys = S.statuses.map((x) => x.key);
-    const order = [...keys.filter((k) => k !== 'todo' && k !== 'done'), 'todo', 'done'];
+    const order = [...keys.filter((k) => k !== 'todo'), 'todo'];
     // Задачи со статусом, которого уже нет (удалён в другой вкладке), не должны пропасть из списка
-    S.tasks.forEach((t) => { if (!order.includes(t.status)) order.push(t.status); });
+    list.forEach((t) => { if (!order.includes(t.status)) order.push(t.status); });
     const groups = order.map((s) => ({ s, items: byStatus(s) })).filter((g) => g.items.length);
-    body.innerHTML = groups.length ? groups.map((g) => `
+    main = groups.length ? groups.map((g) => `
       <section class="task-group">
         <h3><span class="dot" style="background:${statusColor(g.s)}"></span>${esc(statusOf(g.s).name)}<span class="kids-n">${g.items.length}</span></h3>
         <div class="task-list">${g.items.map(taskRow).join('')}</div>
-      </section>`).join('') : '<p class="muted">Под этот фильтр задач нет.</p>';
+      </section>`).join('')
+      : `<p class="muted">${S.taskFilter === 'all' ? 'Все задачи завершены.' : 'Под этот фильтр задач нет.'}</p>`;
   }
+  body.innerHTML = main + (S.taskFilter === 'all' ? doneSection() : '') + taskTrashSection() + taskBulkBar();
+  const allBtn = $('[data-bulk="all"]', body);
+  if (allBtn) {
+    const visible = $$('[data-task]', body).length;
+    allBtn.textContent = S.taskSelected.size && S.taskSelected.size >= visible ? 'Снять выделение' : 'Выбрать все';
+  }
+  if (S.taskView === 'board') setupBoardDnD(body);
+  if (S.taskTrash === null && S.taskTrashOpen) loadTaskTrash();
+}
+
+// «Завершённые» — свёрнутый блок под задачами, свежие сверху
+function doneSection() {
+  const done = S.tasks.filter(isDone).sort((a, b) => toDate(b.completed_at) - toDate(a.completed_at) || b.id - a.id);
+  if (!done.length) return '';
+  const shown = S.doneAll ? done : done.slice(0, DONE_PAGE);
+  return `<section class="task-group fold done-group">
+    <div class="toc-head"><h3><button class="trash-toggle ${S.doneOpen ? 'open' : ''}" data-fold="done" aria-expanded="${S.doneOpen}">
+      ${icon('chevron')}<span>Завершённые</span><span class="trash-n">${done.length}</span></button></h3></div>
+    ${S.doneOpen ? `<div class="task-list">${shown.map(taskRow).join('')}</div>
+      ${shown.length < done.length ? `<button class="btn ghost more-btn" data-done-all>Показать все (${done.length})</button>` : ''}` : ''}
+  </section>`;
 }
 
 function taskMeta(t) {
+  if (isDone(t)) return `<span class="t-meta"><span class="done-at">${icon('check')}${ago(t.completed_at)}</span></span>`;
   const parts = [];
   if (t.due_date) {
-    const cls = t.status !== 'done' && t.due_date < todayStr() ? 'overdue' : t.due_date === todayStr() ? 'today' : '';
+    const cls = t.due_date < todayStr() ? 'overdue' : t.due_date === todayStr() ? 'today' : '';
     parts.push(`<span class="due ${cls}">${icon('calendar')}${dueLabel(t.due_date)}</span>`);
   }
-  if (t.priority !== 'medium' || t.status !== 'done') parts.push(`<span class="prio ${t.priority}">${PRIORITY[t.priority]}</span>`);
-  return parts.length ? `<span class="t-meta">${parts.join('')}</span>` : '';
-}
-function checkBtn(t) {
-  const cls = t.status === 'done' ? 'on' : '';
-  return `<button class="check ${cls}" data-check="${t.id}" aria-label="${t.status === 'done' ? 'Вернуть в работу' : 'Отметить выполненной'}">${icon('check')}</button>`;
+  parts.push(`<span class="prio ${t.priority}">${PRIORITY[t.priority]}</span>`);
+  return `<span class="t-meta">${parts.join('')}</span>`;
 }
 const favMark = (t) => (t.favorite_at ? icon('star', 'filled mini-star') : '');
-const taskRow = (t) => `<div class="task-row ${t.status === 'done' ? 'done' : ''}" data-task="${t.id}">${checkBtn(t)}<span class="t-title ${t.title.trim() ? '' : 'untitled'}">${esc(taskTitle(t))}${favMark(t)}</span>${taskMeta(t)}</div>`;
-const taskCard = (t) => `<div class="card ${t.status === 'done' ? 'done' : ''}" draggable="true" data-task="${t.id}"><div class="c-title ${t.title.trim() ? '' : 'untitled'}">${esc(taskTitle(t))}${favMark(t)}</div>${taskMeta(t)}</div>`;
+const selBox = (t) => {
+  if (!S.taskSelect) return '';
+  const on = S.taskSelected.has(t.id);
+  return `<span class="sel-box ${on ? 'on' : ''}" role="checkbox" aria-checked="${on}" aria-label="Выбрать"></span>`;
+};
+const rowCls = (t) => `${isDone(t) ? 'done' : ''} ${S.taskSelect ? 'sel' : ''} ${S.taskSelected.has(t.id) ? 'selected' : ''}`;
+const taskRow = (t) => `<div class="task-row ${rowCls(t)}" data-task="${t.id}">${selBox(t)}<span class="t-title ${t.title.trim() ? '' : 'untitled'}">${esc(taskTitle(t))}${favMark(t)}</span>${taskMeta(t)}</div>`;
+const taskCard = (t) => `<div class="card ${rowCls(t)}" ${S.taskSelect ? '' : 'draggable="true"'} data-task="${t.id}">${selBox(t)}<div class="c-title ${t.title.trim() ? '' : 'untitled'}">${esc(taskTitle(t))}${favMark(t)}</div>${taskMeta(t)}</div>`;
 
-$('#app').addEventListener('click', async (e) => {
-  const chk = e.target.closest('[data-check]');
-  if (chk) {
-    e.stopPropagation();
-    const t = S.tasks.find((x) => x.id === Number(chk.dataset.check));
-    await updateTask(t, { status: t.status === 'done' ? 'todo' : 'done' });
-    return;
+function taskBulkBar() {
+  if (!S.taskSelect) return '';
+  const sel = [...S.taskSelected].map(taskById).filter(Boolean);
+  const n = sel.length;
+  const anyActive = sel.some((t) => !isDone(t));
+  return `<div class="bulk-bar" role="region" aria-label="Выбранные задачи">
+    <span class="bulk-count">${n ? `Выбрано: <b>${n}</b>` : 'Отметьте задачи'}</span>
+    <button class="btn ghost" data-bulk="all">Выбрать все</button>
+    ${n && !anyActive
+      ? `<button class="btn" data-bulk="reopen">${icon('arrowUp')}Вернуть в работу</button>`
+      : `<button class="btn primary" data-bulk="complete" ${n ? '' : 'disabled'}>${icon('check')}Завершить</button>`}
+    <button class="btn danger solid" data-bulk="delete" ${n ? '' : 'disabled'}>${icon('trash')}Удалить</button>
+  </div>`;
+}
+
+// #tasks-body не пересоздаётся при перерисовке — обработчики вешаем один раз
+function bindTasksBody(body) {
+  if (body.dataset.bound) return;
+  body.dataset.bound = '1';
+  body.addEventListener('click', async (e) => {
+    const fold = e.target.closest('[data-fold]');
+    if (fold) {
+      if (fold.dataset.fold === 'done') { S.doneOpen = !S.doneOpen; store.set('kb-done-open', S.doneOpen); }
+      else { S.taskTrashOpen = !S.taskTrashOpen; store.set('kb-task-trash-open', S.taskTrashOpen); }
+      return renderTasksBody();
+    }
+    if (e.target.closest('[data-done-all]')) { S.doneAll = true; return renderTasksBody(); }
+    const bulk = e.target.closest('[data-bulk]');
+    if (bulk) return taskBulkAction(bulk.dataset.bulk);
+    const tr = e.target.closest('[data-ttrash]');
+    if (tr) return taskTrashAction(tr);
+    const row = e.target.closest('[data-task]');
+    if (!row || row.classList.contains('dragging')) return;
+    const id = Number(row.dataset.task);
+    if (S.taskSelect) {
+      S.taskSelected.has(id) ? S.taskSelected.delete(id) : S.taskSelected.add(id);
+      return renderTasksBody();
+    }
+    openTaskPanel(id);
+  });
+}
+
+async function taskBulkAction(kind) {
+  const ids = [...S.taskSelected].filter(taskById);
+  if (kind === 'all') {
+    const visible = $$('#tasks-body [data-task]').map((el) => Number(el.dataset.task));
+    S.taskSelected = new Set(ids.length >= visible.length ? [] : visible);
+    return renderTasksBody();
   }
-  const row = e.target.closest('[data-task]');
-  if (row && !row.classList.contains('dragging')) openTaskPanel(Number(row.dataset.task));
-});
+  if (!ids.length) return;
+  S.taskSelect = false;
+  S.taskSelected.clear();
+  if (kind === 'complete') return setCompleted(ids.filter((id) => !isDone(taskById(id))), true);
+  if (kind === 'reopen') return setCompleted(ids, false);
+  if (kind === 'delete') return deleteTasks(ids);
+}
+
+// Завершить или вернуть в работу; в уведомлении — «Отменить»
+async function setCompleted(ids, completed, { undoable = true } = {}) {
+  if (!ids.length) return renderTasksBody();
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  ids.forEach((id) => { const t = taskById(id); if (t) t.completed_at = completed ? t.completed_at || now : null; });
+  refreshTasks();
+  try {
+    const { tasks } = await api('POST', '/api/tasks/complete', { ids, completed });
+    tasks.forEach((nt) => { const t = taskById(nt.id); if (t) Object.assign(t, nt); });
+    refreshTasks();
+    if (!undoable) return;
+    const n = ids.length;
+    const text = completed
+      ? (n === 1 ? 'Задача завершена' : `Завершено: ${n} ${plural(n, 'задача', 'задачи', 'задач')}`)
+      : (n === 1 ? 'Задача возвращена в работу' : `Возвращено в работу: ${n} ${plural(n, 'задача', 'задачи', 'задач')}`);
+    toast(text, '', { label: 'Отменить', fn: () => setCompleted(ids, !completed, { undoable: false }) });
+  } catch (err) {
+    S.tasks = await api('GET', '/api/tasks').catch(() => S.tasks);
+    refreshTasks();
+    fail(err);
+  }
+}
+
+async function deleteTasks(ids) {
+  const set = new Set(ids);
+  S.tasks = S.tasks.filter((t) => !set.has(t.id));
+  refreshTasks();
+  try {
+    const { trashed } = await api('POST', '/api/tasks/delete', { ids });
+    S.taskTrash = null;
+    refreshTasks();
+    const n = ids.length;
+    toast(n === 1 ? 'Задача удалена' : `Удалено: ${n} ${plural(n, 'задача', 'задачи', 'задач')}`, '',
+      trashed.length ? { label: 'Отменить', fn: () => restoreTasks(trashed, { undo: true }) } : null);
+  } catch (err) {
+    S.tasks = await api('GET', '/api/tasks').catch(() => S.tasks);
+    refreshTasks();
+    fail(err);
+  }
+}
+
+/* ---------- Задачи: «Недавно удалённые» (своя корзина, не общая с Заметками) ---------- */
+async function loadTaskTrash() {
+  S.taskTrash = { loading: true, days: 30, items: [] };
+  try { S.taskTrash = await api('GET', '/api/trash/tasks'); } catch (e) { S.taskTrash = { days: 30, items: [] }; fail(e); }
+  if (S.section === 'tasks') renderTasksBody();
+}
+
+function taskTrashSection() {
+  const t = S.taskTrash;
+  const n = t && !t.loading ? t.items.length : 0;
+  const head = `
+    <div class="toc-head">
+      <h3><button class="trash-toggle ${S.taskTrashOpen ? 'open' : ''}" data-fold="trash" aria-expanded="${S.taskTrashOpen}">
+        ${icon('chevron')}<span>Недавно удалённые</span>${n ? `<span class="trash-n">${n}</span>` : ''}</button></h3>
+      ${S.taskTrashOpen && n ? '<button class="btn ghost" data-ttrash="clear">Очистить</button>' : ''}
+    </div>`;
+  const wrap = (inner) => `<section class="task-group fold trash">${head}${inner}</section>`;
+  if (!S.taskTrashOpen) return wrap('');
+  if (!t || t.loading) return wrap('<p class="toc-empty">Загрузка…</p>');
+  if (!n) return wrap(`<p class="toc-empty">Здесь пусто. Удалённые задачи хранятся ${t.days} дней, потом удаляются навсегда.</p>`);
+  const rows = t.items.map((it) => {
+    const left = trashDaysLeft(it, t.days);
+    const was = it.completed_at ? 'была завершена' : `была в «${esc(statusOf(it.status).name)}»`;
+    return `<li class="trash-row" data-id="${it.id}">
+      ${icon('tasks')}
+      <span class="trash-main">
+        <span class="toc-title ${it.title.trim() ? '' : 'untitled'}">${esc(it.title.trim() || 'Без названия')}</span>
+        <span class="trash-sub">${was}</span>
+      </span>
+      <span class="trash-meta ${left <= 3 ? 'soon' : ''}">удалена ${ago(it.deleted_at)} · ${left <= 1 ? 'удалится сегодня' : `осталось ${left} дн.`}</span>
+      <button class="btn ghost" data-ttrash="restore">Восстановить</button>
+      <button class="icon-btn" data-ttrash="purge" title="Удалить навсегда" aria-label="Удалить навсегда">${icon('trash')}</button>
+    </li>`;
+  }).join('');
+  return wrap(`<p class="hint">Удалённые задачи хранятся ${t.days} дней, потом удаляются навсегда.</p>
+    <ol class="toc trash-list">${rows}</ol>`);
+}
+
+async function taskTrashAction(btn) {
+  const kind = btn.dataset.ttrash;
+  if (kind === 'clear') {
+    const n = S.taskTrash.items.length;
+    const ok = await confirmDialog({
+      title: 'Очистить «Недавно удалённые»?',
+      text: `${n} ${plural(n, 'задача будет удалена', 'задачи будут удалены', 'задач будут удалены')} навсегда. Вернуть их будет нельзя.`,
+      okText: 'Удалить навсегда', danger: true,
+    });
+    if (!ok) return;
+    try { await api('DELETE', '/api/trash/tasks'); toast('Корзина очищена'); } catch (e) { fail(e); }
+    return loadTaskTrash();
+  }
+  const id = Number(btn.closest('.trash-row').dataset.id);
+  if (kind === 'restore') return restoreTasks([id]);
+  const it = S.taskTrash.items.find((x) => x.id === id);
+  const ok = await confirmDialog({
+    title: `Удалить «${it.title.trim() || 'Без названия'}» навсегда?`, text: 'Вернуть задачу будет нельзя.',
+    okText: 'Удалить навсегда', danger: true,
+  });
+  if (!ok) return;
+  try { await api('DELETE', `/api/trash/tasks/${id}`); toast('Удалено навсегда'); } catch (err) { fail(err); }
+  loadTaskTrash();
+}
+
+async function restoreTasks(ids, { undo = false } = {}) {
+  try {
+    const { restored } = await api('POST', '/api/trash/tasks/restore', { ids });
+    restored.forEach((t) => { if (!taskById(t.id)) S.tasks.push(t); });
+    S.taskTrash = null;
+    refreshTasks();
+    if (undo) toast('Удаление отменено');
+    else if (restored.length === 1) toast(`«${taskTitle(restored[0])}» восстановлена`);
+  } catch (e) { fail(e); }
+}
 
 async function updateTask(t, patch) {
   Object.assign(t, patch);
-  renderTasksBody();
-  renderTree();
-  updateCounts();
+  refreshTasks();
   try {
     Object.assign(t, await api('PATCH', `/api/tasks/${t.id}`, patch));
     renderTasksBody();
@@ -1717,7 +1931,7 @@ function setupBoardDnD(root) {
   ph.className = 'card-placeholder';
   root.addEventListener('dragstart', (e) => {
     const card = e.target.closest('.card');
-    if (!card) return;
+    if (!card || S.taskSelect) return;
     dragId = Number(card.dataset.task);
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', String(dragId));
@@ -1750,7 +1964,7 @@ function setupBoardDnD(root) {
       else if (el.classList?.contains('card') && Number(el.dataset.task) !== dragId) ids.push(Number(el.dataset.task));
     });
     ph.remove();
-    ids.forEach((id, i) => { const t = S.tasks.find((x) => x.id === id); t.status = status; t.position = i; });
+    ids.forEach((id, i) => { const t = taskById(id); t.status = status; t.position = i; });
     renderTasksBody();
     updateCounts();
     try { await api('POST', '/api/tasks/reorder', { status, ids }); } catch (err) { fail(err); }
@@ -1758,15 +1972,19 @@ function setupBoardDnD(root) {
 }
 
 function openTaskPanel(id, { justCreated = false } = {}) {
-  const t = S.tasks.find((x) => x.id === id);
+  const t = taskById(id);
   if (!t) return;
   closeOverlays();
+  const done = isDone(t);
   const ov = document.createElement('div');
   ov.className = 'overlay';
   const panel = document.createElement('aside');
-  panel.className = 'panel';
+  panel.className = `panel ${done ? 'is-done' : ''}`;
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-label', 'Задача');
+  const completeBtn = done
+    ? `<button class="btn tp-complete reopen" id="tp-complete">${icon('arrowUp')}Вернуть в работу</button>`
+    : `<button class="btn tp-complete" id="tp-complete">${icon('check')}Завершить задачу</button>`;
   panel.innerHTML = `
     <div class="panel-body">
       <div class="tp-head">
@@ -1779,7 +1997,9 @@ function openTaskPanel(id, { justCreated = false } = {}) {
       </div>
       <div class="props">
         <span>Статус</span>
-        <select id="tp-status">${S.statuses.map((st) => `<option value="${st.key}" ${t.status === st.key ? 'selected' : ''}>${esc(st.name)}</option>`).join('')}</select>
+        ${done
+          ? `<span class="prop-text done-state" title="${esc(ago(t.completed_at))}">${icon('check')}Завершена<span class="muted">· ${esc(fullDateTime(t.completed_at))}</span></span>`
+          : `<select id="tp-status">${S.statuses.map((st) => `<option value="${st.key}" ${t.status === st.key ? 'selected' : ''}>${esc(st.name)}</option>`).join('')}</select>`}
         <span>Приоритет</span>
         <select id="tp-prio">${Object.entries(PRIORITY).map(([k, v]) => `<option value="${k}" ${t.priority === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
         <span>Срок</span>
@@ -1787,6 +2007,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
         <span>Создана</span>
         <span class="prop-text" title="${esc(ago(t.created_at))}">${esc(fullDateTime(t.created_at))}</span>
       </div>
+      <div class="tp-complete-row">${completeBtn}</div>
       <div class="editor-box">
         <div id="tp-toolbar"></div>
         <div class="editor" id="tp-desc" contenteditable="true" data-placeholder="Описание, заметки, чек-лист…">${t.description}</div>
@@ -1804,8 +2025,19 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     if (!justCreated || title.value.trim() || desc.textContent.trim() || desc.querySelector('img, hr, li')) return;
     if (!S.tasks.includes(t)) return;
     S.tasks = S.tasks.filter((x) => x !== t);
-    renderTasksBody(); renderTree(); updateCounts();
+    refreshTasks();
     try { await api('DELETE', `/api/tasks/${t.id}`); } catch (e) { fail(e); }
+  };
+  // Перед завершением или удалением дожидаемся сохранения, чтобы не потерять последние правки
+  const saveAll = async () => {
+    saveTitle.cancel();
+    saveDesc.cancel();
+    const v = title.value.trim();
+    const patch = {};
+    if (v && v !== t.title) patch.title = v;
+    if (descDirty) { patch.description = serializeEditor(desc); descDirty = false; }
+    if (!Object.keys(patch).length) return;
+    try { Object.assign(t, await api('PATCH', `/api/tasks/${t.id}`, patch)); } catch (e) { fail(e); }
   };
   const onKey = (e) => { if (e.key === 'Escape' && !$('.modal')) close(); };
   document.addEventListener('keydown', onKey);
@@ -1828,11 +2060,12 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   title.oninput = () => { grow(); saveTitle(); };
   // Enter в названии — переход к описанию
   title.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); saveTitleNow(); desc.focus(); } };
-  $('#tp-status', panel).onchange = async (e) => { await updateTask(t, { status: e.target.value }); paintDue(); };
+  const statusSel = $('#tp-status', panel);
+  if (statusSel) statusSel.onchange = (e) => updateTask(t, { status: e.target.value });
   $('#tp-prio', panel).onchange = (e) => updateTask(t, { priority: e.target.value });
   const dueBtn = $('#tp-due', panel);
   const paintDue = () => {
-    const overdue = t.due_date && t.status !== 'done' && t.due_date < todayStr();
+    const overdue = t.due_date && !isDone(t) && t.due_date < todayStr();
     dueBtn.className = `date-btn ${t.due_date ? '' : 'no-date'} ${overdue ? 'overdue' : ''}`;
     dueBtn.innerHTML = `${icon('calendar')}<span>${t.due_date ? dueLong(t.due_date) : 'Без срока'}</span>`;
   };
@@ -1854,19 +2087,24 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   saveDesc.flush = () => { saveDesc.cancel(); saveDescNow(); };
   $('#tp-toolbar', panel).replaceWith(makeEditor(desc, () => { descDirty = true; saveDesc(); }));
 
-  $('#tp-delete', panel).onclick = async () => {
-    const ok = await confirmDialog({ title: 'Удалить задачу?', text: `«${taskTitle(t)}» будет удалена без возможности восстановления.`, okText: 'Удалить', danger: true });
-    if (!ok) return;
-    try {
-      await api('DELETE', `/api/tasks/${t.id}`);
-      S.tasks = S.tasks.filter((x) => x.id !== t.id);
-      renderTree();
-      descDirty = false;
+  // Завершить — карточка закрывается, в уведомлении «Отменить». Вернуть в работу — карточка остаётся открытой
+  $('#tp-complete', panel).onclick = async () => {
+    await saveAll();
+    justCreated = false;
+    if (done) {
+      await setCompleted([t.id], false);
+      openTaskPanel(t.id);
+    } else {
       close();
-      renderTasksBody();
-      updateCounts();
-      toast('Задача удалена');
-    } catch (e) { fail(e); }
+      setCompleted([t.id], true);
+    }
+  };
+  // Удаление — в «Недавно удалённые», без подтверждения; в уведомлении «Отменить»
+  $('#tp-delete', panel).onclick = async () => {
+    await saveAll();
+    justCreated = false;
+    close();
+    deleteTasks([t.id]);
   };
   // Только что созданная задача — курсор сразу в название
   if (justCreated || !t.description) setTimeout(() => title.focus(), 50);
@@ -1903,7 +2141,7 @@ function openSearch() {
     if (data.tasks.length) {
       html += '<h4>Задачи</h4>' + data.tasks.map((t) => {
         items.push({ task: t.id });
-        return `<div class="result" data-i="${items.length - 1}">${icon('tasks')}<b>${hl(taskTitle(t), q)}</b><small>${esc(statusOf(t.status).name)}${t.snippet ? ' · ' + hl(t.snippet, q) : ''}</small></div>`;
+        return `<div class="result" data-i="${items.length - 1}">${icon('tasks')}<b>${hl(taskTitle(t), q)}</b><small>${t.completed ? 'Завершена' : esc(statusOf(t.status).name)}${t.snippet ? ' · ' + hl(t.snippet, q) : ''}</small></div>`;
       }).join('');
     }
     results.innerHTML = html || `<div class="palette-empty">${q ? 'Ничего не найдено' : 'Начните вводить запрос'}</div>`;
@@ -2159,7 +2397,7 @@ function confirmDialog({ title, text, okText = 'Ок', danger = false }) {
 function openStatusesDialog({ focus = null } = {}) {
   const m = openModal(`
     <h2>Статусы задач</h2>
-    <p>Статусы — это колонки на доске и группы в списке. «${esc(statusOf('todo').name)}» и «${esc(statusOf('done').name)}» нельзя удалить: в первый возвращаются задачи, с которых сняли галочку, во второй — отмеченные галочкой. Их можно переименовать и перекрасить.</p>
+    <p>Статусы — это колонки на доске и группы в списке. «${esc(statusOf('todo').name)}» нельзя удалить — в него переходят задачи удалённого статуса, — но можно переименовать и перекрасить. Готовую задачу завершают кнопкой в её карточке, она попадает в блок «Завершённые».</p>
     <div class="st-list" id="st-list"></div>
     <div class="st-default">
       <label for="st-default">Новые задачи попадают в</label>
@@ -2177,7 +2415,7 @@ function openStatusesDialog({ focus = null } = {}) {
 
   function draw() {
     list.innerHTML = S.statuses.map((st, i) => {
-      const n = S.tasks.filter((t) => t.status === st.key).length;
+      const n = S.tasks.filter((t) => t.status === st.key && !isDone(t)).length;
       return `<div class="st-item" data-key="${st.key}">
         <div class="st-row">
           <button type="button" class="st-swatch" data-swatch style="background:var(--st-${st.color})"
@@ -2193,8 +2431,7 @@ function openStatusesDialog({ focus = null } = {}) {
           `<button type="button" class="st-color ${c === st.color ? 'on' : ''}" data-color="${c}" style="background:var(--st-${c})" title="${title}" aria-label="${title}" aria-pressed="${c === st.color}">${icon('check')}</button>`).join('')}</div>` : ''}
       </div>`;
     }).join('');
-    // «Готово» не предлагаем: новая задача не может быть сразу выполненной
-    $('#st-default', m).innerHTML = S.statuses.filter((st) => st.key !== 'done')
+    $('#st-default', m).innerHTML = S.statuses
       .map((st) => `<option value="${st.key}" ${st.default ? 'selected' : ''}>${esc(st.name)}</option>`).join('');
     $('#st-add', m).disabled = S.statuses.length >= 12;
     $('#st-add', m).title = S.statuses.length >= 12 ? 'Статусов может быть не больше 12' : '';

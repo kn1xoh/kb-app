@@ -153,7 +153,7 @@ function validateUserInput(email, password, passwordOptional = false) {
 app.get('/api/admin/users', auth, admin, (req, res) => {
   res.json(db.prepare(`SELECT u.id, u.email, u.name, u.is_admin, u.created_at,
     (SELECT COUNT(*) FROM pages p WHERE p.user_id = u.id AND p.deleted_at IS NULL) AS pages,
-    (SELECT COUNT(*) FROM tasks t WHERE t.user_id = u.id) AS tasks
+    (SELECT COUNT(*) FROM tasks t WHERE t.user_id = u.id AND t.deleted_at IS NULL) AS tasks
     FROM users u ORDER BY u.created_at`).all().map((u) => ({ ...u, is_admin: !!u.is_admin })));
 });
 
@@ -377,6 +377,8 @@ function purgeExpired() {
     AND deleted_at < datetime('now', ?)`).all(`-${TRASH_DAYS} days`);
   old.forEach((r) => purgeBatch(r.user_id, r.id));
   if (old.length) console.log(`Корзина: окончательно удалены записи старше ${TRASH_DAYS} дней (${old.length})`);
+  const tasks = db.prepare("DELETE FROM tasks WHERE deleted_at < datetime('now', ?)").run(`-${TRASH_DAYS} days`).changes;
+  if (tasks) console.log(`Корзина задач: окончательно удалены задачи старше ${TRASH_DAYS} дней (${tasks})`);
 }
 purgeExpired();
 setInterval(purgeExpired, 6 * 3600e3).unref();
@@ -422,8 +424,8 @@ app.delete('/api/trash/pages', auth, (req, res) => {
 
 // Цвета статусов — ключи палитры; сами цвета заданы в app.css (--st-<ключ>) для светлой и тёмной темы
 const STATUS_COLORS = ['gray', 'green', 'teal', 'blue', 'indigo', 'purple', 'pink', 'red', 'orange', 'yellow', 'brown'];
-const DEFAULT_STATUSES = [['todo', 'Нужно сделать', 'gray'], ['in_progress', 'В работе', 'orange'], ['done', 'Готово', 'green']];
-const FIXED_STATUSES = ['todo', 'done'];
+const DEFAULT_STATUSES = [['todo', 'Нужно сделать', 'gray'], ['in_progress', 'В работе', 'orange']];
+const FIXED_STATUSES = ['todo'];
 const MAX_STATUSES = 12;
 
 function listStatuses(userId) {
@@ -434,8 +436,8 @@ function listStatuses(userId) {
     db.transaction(() => DEFAULT_STATUSES.forEach(([k, n, c], i) => ins.run(userId, k, n, c, i)))();
     rows = db.prepare(sql).all(userId);
   }
-  // Статус по умолчанию: выбранный пользователем, иначе «Нужно сделать». «Готово» им быть не может
-  const chosen = rows.find((r) => r.is_default && r.key !== 'done');
+  // Статус по умолчанию: выбранный пользователем, иначе «Нужно сделать»
+  const chosen = rows.find((r) => r.is_default);
   const defKey = chosen ? chosen.key : 'todo';
   return rows.map(({ is_default, ...r }) => ({ ...r, fixed: FIXED_STATUSES.includes(r.key), default: r.key === defKey }));
 }
@@ -445,12 +447,16 @@ const cleanStatusName = (v) => String(v ?? '').replace(/\s+/g, ' ').trim().slice
 const nameTaken = (userId, name, exceptKey) =>
   listStatuses(userId).some((s) => s.key !== exceptKey && s.name.toLowerCase() === name.toLowerCase());
 const PRIORITIES = ['low', 'medium', 'high'];
-const getTask = (userId, id) => db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(id, userId);
-const taskOut = (t) => { const { search_text, user_id, ...rest } = t; return rest; };
+// Живые задачи (не в корзине); завершённые тоже живые
+const getTask = (userId, id) => db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ? AND deleted_at IS NULL').get(id, userId);
+const taskOut = (t) => { const { search_text, user_id, deleted_at, ...rest } = t; return rest; };
 const validDate = (d) => d === null || d === '' || /^\d{4}-\d{2}-\d{2}$/.test(d);
+const topPosition = (userId, status) => db.prepare(`SELECT COALESCE(MIN(position), 1) - 1 AS p FROM tasks
+  WHERE user_id = ? AND status = ? AND deleted_at IS NULL AND completed_at IS NULL`).get(userId, status).p;
+const idList = (ids) => (Array.isArray(ids) ? [...new Set(ids.map(Number).filter(Number.isInteger))] : []);
 
 app.get('/api/tasks', auth, (req, res) => {
-  res.json(db.prepare('SELECT * FROM tasks WHERE user_id = ? ORDER BY position, id').all(req.user.id).map(taskOut));
+  res.json(db.prepare('SELECT * FROM tasks WHERE user_id = ? AND deleted_at IS NULL ORDER BY position, id').all(req.user.id).map(taskOut));
 });
 
 app.post('/api/tasks', auth, (req, res) => {
@@ -460,10 +466,8 @@ app.post('/api/tasks', auth, (req, res) => {
   const status = b.status && statusExists(req.user.id, b.status) ? b.status : defaultStatus(req.user.id);
   const priority = PRIORITIES.includes(b.priority) ? b.priority : 'medium';
   const due = validDate(b.due_date) && b.due_date ? b.due_date : null;
-  const pos = db.prepare('SELECT COALESCE(MIN(position), 1) - 1 AS p FROM tasks WHERE user_id = ? AND status = ?')
-    .get(req.user.id, status).p;
   const info = db.prepare(`INSERT INTO tasks (user_id, title, status, priority, due_date, position, search_text)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(req.user.id, title, status, priority, due, pos, lower(title));
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(req.user.id, title, status, priority, due, topPosition(req.user.id, status), lower(title));
   res.json(taskOut(getTask(req.user.id, info.lastInsertRowid)));
 });
 
@@ -476,10 +480,7 @@ app.patch('/api/tasks/:id', auth, (req, res) => {
   if (b.description !== undefined) next.description = clean(b.description);
   if (b.status !== undefined) {
     if (!statusExists(req.user.id, b.status)) return httpError(res, 400, 'Такого статуса нет. Обновите страницу');
-    if (b.status !== t.status) {
-      next.position = db.prepare('SELECT COALESCE(MIN(position), 1) - 1 AS p FROM tasks WHERE user_id = ? AND status = ?')
-        .get(req.user.id, b.status).p;
-    }
+    if (b.status !== t.status) next.position = topPosition(req.user.id, b.status);
     next.status = b.status;
   }
   if (b.priority !== undefined) {
@@ -497,11 +498,33 @@ app.patch('/api/tasks/:id', auth, (req, res) => {
   res.json(taskOut(getTask(req.user.id, t.id)));
 });
 
+// Завершить / вернуть в работу одну или несколько задач. Вернувшаяся задача встаёт первой в своём статусе
+// (если статуса уже нет — в статус по умолчанию)
+app.post('/api/tasks/complete', auth, (req, res) => {
+  const ids = idList(req.body?.ids);
+  if (!ids.length) return httpError(res, 400, 'Не выбраны задачи');
+  const done = req.body?.completed !== false;
+  const out = [];
+  db.transaction(() => ids.forEach((id) => {
+    const t = getTask(req.user.id, id);
+    if (!t) return;
+    if (done) {
+      if (!t.completed_at) db.prepare("UPDATE tasks SET completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(t.id);
+    } else if (t.completed_at) {
+      const status = statusExists(req.user.id, t.status) ? t.status : defaultStatus(req.user.id);
+      db.prepare("UPDATE tasks SET completed_at = NULL, status = ?, position = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(status, topPosition(req.user.id, status), t.id);
+    }
+    out.push(taskOut(getTask(req.user.id, t.id)));
+  }))();
+  res.json({ tasks: out });
+});
+
 app.post('/api/tasks/reorder', auth, (req, res) => {
   const { status, ids } = req.body || {};
   if (!statusExists(req.user.id, status) || !Array.isArray(ids)) return httpError(res, 400, 'Некорректные данные');
   const upd = db.prepare(`UPDATE tasks SET status = ?, position = ?, updated_at = datetime('now')
-    WHERE id = ? AND user_id = ?`);
+    WHERE id = ? AND user_id = ? AND deleted_at IS NULL`);
   db.transaction(() => ids.forEach((id, i) => upd.run(status, i, id, req.user.id)))();
   res.json({ ok: true });
 });
@@ -513,9 +536,66 @@ app.post('/api/tasks/:id/favorite', auth, (req, res) => {
   res.json({ favorite_at: getTask(req.user.id, t.id).favorite_at });
 });
 
+// ---------- tasks trash («Недавно удалённые» задачи; у Заметок своя корзина) ----------
+
+// Удалённые задачи уходят в корзину. Совсем пустую задачу (без названия и описания) хранить незачем — удаляется сразу
+function trashTasks(userId, ids) {
+  const now = sqlNow();
+  const trashed = [];
+  db.transaction(() => ids.forEach((id) => {
+    const t = getTask(userId, id);
+    if (!t) return;
+    if (!t.title.trim() && !plain(t.description).trim()) {
+      db.prepare('DELETE FROM tasks WHERE id = ?').run(t.id);
+      return;
+    }
+    db.prepare('UPDATE tasks SET deleted_at = ? WHERE id = ?').run(now, t.id);
+    trashed.push(t.id);
+  }))();
+  return trashed;
+}
+
 app.delete('/api/tasks/:id', auth, (req, res) => {
-  db.prepare('DELETE FROM tasks WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  if (!getTask(req.user.id, req.params.id)) return httpError(res, 404, 'Задача не найдена');
+  res.json({ trashed: trashTasks(req.user.id, [Number(req.params.id)]) });
+});
+
+app.post('/api/tasks/delete', auth, (req, res) => {
+  const ids = idList(req.body?.ids);
+  if (!ids.length) return httpError(res, 400, 'Не выбраны задачи');
+  res.json({ trashed: trashTasks(req.user.id, ids) });
+});
+
+app.get('/api/trash/tasks', auth, (req, res) => {
+  const items = db.prepare(`SELECT id, title, status, completed_at, deleted_at FROM tasks
+    WHERE user_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, id DESC`).all(req.user.id);
+  res.json({ days: TRASH_DAYS, items });
+});
+
+// Восстановленная задача возвращается в свой статус (если его уже нет — в статус по умолчанию), первой в колонке
+app.post('/api/trash/tasks/restore', auth, (req, res) => {
+  const ids = idList(req.body?.ids);
+  if (!ids.length) return httpError(res, 400, 'Не выбраны задачи');
+  const restored = [];
+  db.transaction(() => ids.forEach((id) => {
+    const t = db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL').get(id, req.user.id);
+    if (!t) return;
+    const status = statusExists(req.user.id, t.status) ? t.status : defaultStatus(req.user.id);
+    db.prepare('UPDATE tasks SET deleted_at = NULL, status = ?, position = ? WHERE id = ?')
+      .run(status, topPosition(req.user.id, status), t.id);
+    restored.push(taskOut(getTask(req.user.id, t.id)));
+  }))();
+  res.json({ restored });
+});
+
+app.delete('/api/trash/tasks/:id', auth, (req, res) => {
+  db.prepare('DELETE FROM tasks WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL').run(req.params.id, req.user.id);
   res.json({ ok: true });
+});
+
+app.delete('/api/trash/tasks', auth, (req, res) => {
+  const { changes } = db.prepare('DELETE FROM tasks WHERE user_id = ? AND deleted_at IS NOT NULL').run(req.user.id);
+  res.json({ ok: true, count: changes });
 });
 
 // ---------- task statuses ----------
@@ -530,14 +610,9 @@ app.post('/api/statuses', auth, (req, res) => {
   if (nameTaken(req.user.id, name)) return httpError(res, 400, 'Статус с таким названием уже есть');
   const color = STATUS_COLORS.includes(req.body?.color) ? req.body.color : 'blue';
   const key = 's_' + crypto.randomBytes(5).toString('hex');
-  // Новый статус встаёт перед «Готово», чтобы «Готово» оставалось последним
-  const done = list.find((s) => s.key === 'done');
-  const pos = done ? done.position : list.length;
-  db.transaction(() => {
-    db.prepare('UPDATE task_statuses SET position = position + 1 WHERE user_id = ? AND position >= ?').run(req.user.id, pos);
-    db.prepare('INSERT INTO task_statuses (user_id, key, name, color, position) VALUES (?, ?, ?, ?, ?)')
-      .run(req.user.id, key, name, color, pos);
-  })();
+  const pos = list.length ? Math.max(...list.map((s) => s.position)) + 1 : 0;
+  db.prepare('INSERT INTO task_statuses (user_id, key, name, color, position) VALUES (?, ?, ?, ?, ?)')
+    .run(req.user.id, key, name, color, pos);
   res.json(listStatuses(req.user.id));
 });
 
@@ -556,7 +631,6 @@ app.patch('/api/statuses/:key', auth, (req, res) => {
     color = b.color;
   }
   if (b.default !== undefined && b.default !== true) return httpError(res, 400, 'Выберите другой статус по умолчанию');
-  if (b.default === true && s.key === 'done') return httpError(res, 400, 'Новые задачи не могут сразу попадать в «Готово»');
   db.transaction(() => {
     db.prepare('UPDATE task_statuses SET name = ?, color = ? WHERE user_id = ? AND key = ?').run(name, color, req.user.id, s.key);
     if (b.default === true) {
@@ -577,7 +651,7 @@ app.post('/api/statuses/reorder', auth, (req, res) => {
   res.json(listStatuses(req.user.id));
 });
 
-// Удаление статуса: его задачи переходят в «Нужно сделать»
+// Удаление статуса: его задачи (в том числе завершённые и в корзине) переходят в «Нужно сделать»
 app.delete('/api/statuses/:key', auth, (req, res) => {
   const key = req.params.key;
   if (FIXED_STATUSES.includes(key)) return httpError(res, 400, 'Этот статус нельзя удалить, но можно переименовать');
@@ -608,9 +682,9 @@ app.get('/api/search', auth, (req, res) => {
   const pages = db.prepare(`SELECT id, title, content FROM pages WHERE user_id = ? AND deleted_at IS NULL AND search_text LIKE ? ESCAPE '\\'
     ORDER BY updated_at DESC LIMIT 20`).all(req.user.id, like)
     .map((p) => ({ id: p.id, title: p.title, snippet: snippet(plain(p.content), q) }));
-  const tasks = db.prepare(`SELECT id, title, status, description FROM tasks WHERE user_id = ? AND search_text LIKE ? ESCAPE '\\'
-    ORDER BY updated_at DESC LIMIT 20`).all(req.user.id, like)
-    .map((t) => ({ id: t.id, title: t.title, status: t.status, snippet: snippet(plain(t.description), q) }));
+  const tasks = db.prepare(`SELECT id, title, status, completed_at, description FROM tasks WHERE user_id = ? AND deleted_at IS NULL
+    AND search_text LIKE ? ESCAPE '\\' ORDER BY completed_at IS NOT NULL, updated_at DESC LIMIT 20`).all(req.user.id, like)
+    .map((t) => ({ id: t.id, title: t.title, status: t.status, completed: !!t.completed_at, snippet: snippet(plain(t.description), q) }));
   res.json({ pages, tasks });
 });
 

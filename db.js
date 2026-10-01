@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id, status, position);
 
 -- Статусы задач: у каждого пользователя свои. key хранится в tasks.status.
--- Встроенные todo / done удалить нельзя (в них попадают новые и выполненные задачи), но можно переименовать и перекрасить.
+-- Встроенный todo удалить нельзя (в него уходят задачи удалённого статуса), но можно переименовать и перекрасить.
 CREATE TABLE IF NOT EXISTS task_statuses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -113,6 +113,22 @@ if (/CHECK\s*\(\s*status IN/i.test(tasksSql)) {
     db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id, status, position)');
   })();
   db.exec('PRAGMA foreign_keys = ON');
+}
+
+// Завершение задачи — отдельный признак (completed_at), а не статус: статус остаётся прежним,
+// и при «Вернуть в работу» задача встаёт туда, где была.
+addColumn('tasks', 'completed_at', 'TEXT');
+// Корзина задач: удалённые хранятся 30 дней
+addColumn('tasks', 'deleted_at', 'TEXT');
+// Старый встроенный статус «Готово» (done) убран: его задачи становятся завершёнными
+// и переходят в статус по умолчанию пользователя
+if (db.prepare("SELECT 1 FROM task_statuses WHERE key = 'done' UNION SELECT 1 FROM tasks WHERE status = 'done' LIMIT 1").get()) {
+  db.transaction(() => {
+    db.exec(`UPDATE tasks SET completed_at = COALESCE(completed_at, updated_at),
+      status = COALESCE((SELECT s.key FROM task_statuses s WHERE s.user_id = tasks.user_id AND s.is_default = 1 AND s.key != 'done'), 'todo')
+      WHERE status = 'done'`);
+    db.exec("DELETE FROM task_statuses WHERE key = 'done'");
+  })();
 }
 
 db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
