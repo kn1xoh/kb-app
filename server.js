@@ -199,6 +199,9 @@ app.delete('/api/admin/users/:id', auth, admin, (req, res) => {
 const getPage = (userId, id) => db.prepare('SELECT * FROM pages WHERE id = ? AND user_id = ? AND deleted_at IS NULL').get(id, userId);
 
 app.get('/api/pages', auth, (req, res) => {
+  // заметки без названия, брошенные больше получаса назад (например, закрыли вкладку на телефоне)
+  db.prepare(`SELECT * FROM pages WHERE user_id = ? AND deleted_at IS NULL AND trim(title) = ''
+    AND updated_at < datetime('now', '-30 minutes') ORDER BY id DESC`).all(req.user.id).forEach(finalizePage);
   res.json(db.prepare(`SELECT id, parent_id, title, position, updated_at, favorite_at FROM pages
     WHERE user_id = ? AND deleted_at IS NULL ORDER BY position, id`).all(req.user.id));
 });
@@ -221,16 +224,65 @@ app.post('/api/pages', auth, (req, res) => {
   res.json(getPage(req.user.id, info.lastInsertRowid));
 });
 
+function savePage(page, body) {
+  const title = body?.title !== undefined ? String(body.title).slice(0, 300) : page.title;
+  const content = body?.content !== undefined ? clean(body.content) : page.content;
+  db.prepare(`UPDATE pages SET title = ?, content = ?, search_text = ?, updated_at = datetime('now')
+    WHERE id = ?`).run(title, content, lower(`${title} ${plain(content)}`), page.id);
+  return getPage(page.user_id, page.id);
+}
+
 app.patch('/api/pages/:id', auth, (req, res) => {
   const page = getPage(req.user.id, req.params.id);
   if (!page) return httpError(res, 404, 'Заметка не найдена');
-  const title = req.body.title !== undefined ? String(req.body.title).slice(0, 300) : page.title;
-  const content = req.body.content !== undefined ? clean(req.body.content) : page.content;
-  db.prepare(`UPDATE pages SET title = ?, content = ?, search_text = ?, updated_at = datetime('now')
-    WHERE id = ?`).run(title, content, lower(`${title} ${plain(content)}`), page.id);
-  const updated = getPage(req.user.id, page.id);
+  const updated = savePage(page, req.body);
   res.json({ id: updated.id, title: updated.title, updated_at: updated.updated_at });
 });
+
+// Первая непустая строка текста заметки — для названия (не длиннее 80 символов, режем по слову)
+function firstLine(html) {
+  const text = sanitizeHtml(String(html || '').replace(/<\/(p|div|h\d|li|pre|blockquote)>|<br\s*\/?>/gi, '$&\n'),
+    { allowedTags: [], allowedAttributes: {} })
+    .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+  const line = text.split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).find(Boolean) || '';
+  if (line.length <= 80) return line;
+  const cut = line.slice(0, 80);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > 40 ? cut.slice(0, space) : cut).replace(/[\s.,;:!?—–-]+$/, '')}…`;
+}
+
+// Заметка без названия не остаётся: с текстом — получает название из первой строки,
+// совсем пустая и без подзаметок — удаляется насовсем (в корзину не попадает).
+function finalizePage(page) {
+  if (page.title.trim()) return { title: page.title };
+  const line = firstLine(page.content);
+  if (line) return { title: savePage(page, { title: line }).title };
+  const kids = db.prepare('SELECT COUNT(*) AS n FROM pages WHERE parent_id = ? AND deleted_at IS NULL').get(page.id).n;
+  if (kids) return { title: '' };
+  db.transaction(() => {
+    // подзаметки из корзины не должны пропасть вместе с родителем (ON DELETE CASCADE)
+    db.prepare('UPDATE pages SET parent_id = NULL WHERE parent_id = ?').run(page.id);
+    db.prepare('DELETE FROM pages WHERE id = ?').run(page.id);
+  })();
+  return { deleted: true };
+}
+
+// Вызывается, когда пользователь уходит с заметки; можно сразу передать несохранённые изменения
+app.post('/api/pages/:id/finalize', auth, (req, res) => {
+  let page = getPage(req.user.id, req.params.id);
+  if (!page) return res.json({ deleted: true });
+  if (req.body && (req.body.title !== undefined || req.body.content !== undefined)) page = savePage(page, req.body);
+  res.json(finalizePage(page));
+});
+
+// Заметки без названия, оставшиеся с прошлых версий
+{
+  const untitled = db.prepare("SELECT * FROM pages WHERE deleted_at IS NULL AND trim(title) = '' ORDER BY id DESC").all();
+  let fixed = 0;
+  untitled.forEach((p) => { const r = finalizePage(p); if (r.deleted || r.title) fixed++; });
+  if (fixed) console.log(`Заметки без названия: обработано ${fixed}`);
+}
 
 app.post('/api/pages/:id/move', auth, (req, res) => {
   const page = getPage(req.user.id, req.params.id);

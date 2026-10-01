@@ -312,9 +312,10 @@ document.addEventListener('click', (e) => {
 window.addEventListener('hashchange', route);
 async function route() {
   if (!S.user) return;
-  await flushPageSave();
-  closeOverlays(true);
   const [, section, id] = location.hash.split('/');
+  await flushPageSave();
+  if (S.page && !(section === 'notes' && Number(id) === S.page.id)) await finalizePage(S.page.id);
+  closeOverlays(true);
   if (section !== 'notes' || id) { S.selectMode = false; S.selected.clear(); }
   if (section === 'tasks') return renderTasks();
   if (section === 'notes' && id) return openPage(Number(id));
@@ -884,14 +885,35 @@ function queuePageSave(data) {
 }
 function setSaveState(t) { const el = $('#save-state'); if (el) el.textContent = t; }
 
+// Заметка без названия не сохраняется: при уходе с неё сервер даёт название из первой строки текста,
+// а совсем пустую удаляет. Состояние на клиенте подтягиваем под ответ.
+async function finalizePage(id) {
+  const p = pageById(id);
+  if (!p || p.title.trim()) return;
+  try {
+    const r = await api('POST', `/api/pages/${id}/finalize`);
+    if (r.deleted) {
+      S.pages = S.pages.filter((x) => x.id !== id);
+      S.expanded.delete(id);
+      updateCounts();
+    } else if (r.title) p.title = r.title;
+    renderTree();
+  } catch { /* не мешаем уйти со страницы */ }
+}
+
 window.addEventListener('beforeunload', () => {
-  if (!pendingSave) return;
-  fetch(`/api/pages/${pendingSave.id}`, {
-    method: 'PATCH', keepalive: true, credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'kb' },
-    body: JSON.stringify(pendingSave.data),
-  });
+  const data = pendingSave?.data || {};
+  // заметка без названия — один запрос, который и сохраняет, и даёт название (или удаляет пустую)
+  if (S.page && !pageById(S.page.id)?.title.trim()) sendNow('POST', `/api/pages/${S.page.id}/finalize`, data);
+  else if (pendingSave) sendNow('PATCH', `/api/pages/${pendingSave.id}`, data);
 });
+function sendNow(method, url, body) {
+  fetch(url, {
+    method, keepalive: true, credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'kb' },
+    body: JSON.stringify(body),
+  });
+}
 
 async function openPage(id) {
   setActiveNav('notes');
@@ -2084,6 +2106,7 @@ function openUserMenu(anchor) {
     if (m === 'users') openUsersDialog();
     if (m === 'logout') {
       await flushPageSave();
+      if (S.page) await finalizePage(S.page.id);
       await api('POST', '/api/logout').catch(() => {});
       S.user = null;
       S.page = null;
