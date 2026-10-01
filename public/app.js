@@ -422,12 +422,10 @@ async function createPage(parentId) {
 function openPageMenu(anchor, id) {
   const p = pageById(id);
   showMenu(anchor, `
-    <button data-m="open">${icon('file')}Открыть</button>
     <button data-m="add">${icon('plus')}Добавить подзаметку</button>
     <button data-m="move">${icon('move')}Переместить…</button>
     <hr>
     <button data-m="delete" class="danger">${icon('trash')}Удалить</button>`, (m) => {
-    if (m === 'open') location.hash = `#/notes/${id}`;
     if (m === 'add') createPage(id);
     if (m === 'move') openMoveDialog(id);
     if (m === 'delete') deletePage(p);
@@ -601,7 +599,7 @@ function renderNotesHome() {
           : 'Отметьте заметки, которые нужно удалить'}</span>
         <button class="btn ghost" id="sel-all">${sel.total === S.pages.length ? 'Снять выделение' : 'Выбрать все'}</button>
         <button class="btn danger solid" id="sel-delete" ${sel.total ? '' : 'disabled'}>${icon('trash')}Удалить</button>
-      </div>` : '<p class="hint">Перетаскивайте строки: к верхнему или нижнему краю строки — поменять порядок, в середину — вложить внутрь.</p>'}
+      </div>` : ''}
       <section>
         <div class="toc-head"><h3>Недавно изменённые</h3></div>
         <ol class="toc">${recent.map((p) => `<li><a class="toc-row recent-row" href="#/notes/${p.id}">
