@@ -996,7 +996,7 @@ function makeEditor(editor, onChange) {
     <button class="icon-btn" data-cmd="checklist" title="Чек-лист" aria-label="Чек-лист">${icon('checklist')}</button>
     <span class="sep"></span>
     <button class="icon-btn" data-cmd="quote" title="Цитата" aria-label="Цитата">${icon('quote')}</button>
-    <button class="icon-btn" data-cmd="code" title="Блок кода" aria-label="Блок кода">${icon('code')}</button>
+    <button class="icon-btn" data-cmd="code" title="Блок кода (выйти — Enter на пустой строке)" aria-label="Блок кода">${icon('code')}</button>
     <button class="icon-btn" data-cmd="link" title="Ссылка (Ctrl+K)" aria-label="Ссылка">${icon('link')}</button>
     <button class="icon-btn" data-cmd="insertHorizontalRule" title="Разделитель" aria-label="Разделитель">${icon('hr')}</button>
     <button class="icon-btn" data-cmd="clear" title="Очистить форматирование" aria-label="Очистить форматирование">${icon('clear')}</button>`;
@@ -1021,6 +1021,15 @@ function makeEditor(editor, onChange) {
       b.classList.toggle('on', on);
     });
     const blk = blockOf();
+    const inCode = !!blk?.closest('pre');
+    // в блоке кода — только обычный текст: остальные кнопки неактивны
+    $$('[data-cmd], [data-block-btn]', bar).forEach((b) => {
+      const off = inCode && b.dataset.cmd !== 'code';
+      b.classList.toggle('off', off);
+      b.setAttribute('aria-disabled', off ? 'true' : 'false');
+      if (off) b.classList.remove('on');
+    });
+    if (inCode) { $('[data-cmd="code"]', bar).classList.add('on'); $('[data-block-label]', bar).textContent = 'Код'; return; }
     const inChecklist = !!blk?.closest('ul.checklist');
     $('[data-cmd="insertUnorderedList"]', bar).classList.toggle('on', !!blk?.closest('ul') && !inChecklist);
     $('[data-cmd="checklist"]', bar).classList.toggle('on', inChecklist);
@@ -1031,9 +1040,10 @@ function makeEditor(editor, onChange) {
   };
   document.addEventListener('selectionchange', refresh);
 
-  bar.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
+  bar.addEventListener('mousedown', (e) => e.preventDefault());
   const blockBtn = $('[data-block-btn]', bar);
   blockBtn.addEventListener('click', () => {
+    if (blockBtn.classList.contains('off')) return;
     if (!editor.contains(getSelection().anchorNode)) placeCaretEnd(editor);
     const sel = getSelection();
     const range = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
@@ -1051,19 +1061,21 @@ function makeEditor(editor, onChange) {
 
   bar.addEventListener('click', (e) => {
     const b = e.target.closest('[data-cmd]');
-    if (!b) return;
+    if (!b || b.classList.contains('off')) return;
     const cmd = b.dataset.cmd;
     if (!editor.contains(getSelection().anchorNode)) placeCaretEnd(editor);
     const blk = blockOf();
     if (cmd === 'checklist') toggleChecklist(editor, blk);
     else if (cmd === 'quote') document.execCommand('formatBlock', false, blk?.closest('blockquote') ? '<p>' : '<blockquote>');
-    else if (cmd === 'code') document.execCommand('formatBlock', false, blk?.closest('pre') ? '<p>' : '<pre>');
+    else if (cmd === 'code') toggleCode(editor, blk);
     else if (cmd === 'link') return askLink(editor, changed);
     else if (cmd === 'clear') { document.execCommand('removeFormat'); document.execCommand('unlink'); }
     else document.execCommand(cmd);
     changed();
     refresh();
   });
+
+  $$('pre', editor).forEach(flattenCode);
 
   function isEmpty() { return !editor.textContent.trim() && !editor.querySelector('li, hr, pre, h1, h2, h3, blockquote'); }
   function markEmpty() { editor.classList.toggle('is-empty', isEmpty()); }
@@ -1085,6 +1097,23 @@ function makeEditor(editor, onChange) {
   });
 
   editor.addEventListener('keydown', (e) => {
+    const pre = blockOf()?.closest('pre');
+    if (pre) {
+      const k = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && ['b', 'i', 'u'].includes(k)) { e.preventDefault(); return; }
+      if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        codeEnter(editor, pre, e.shiftKey);
+        changed();
+        refresh();
+        return;
+      }
+      if (e.key === 'ArrowDown' && !e.shiftKey && caretOnLastLine(pre)) {
+        // выход вниз из блока кода, даже если после него ничего нет
+        if (!pre.nextElementSibling) { e.preventDefault(); exitCode(pre); changed(); refresh(); return; }
+      }
+      if (e.key === 'Tab') { e.preventDefault(); document.execCommand('insertText', false, '  '); return; }
+    }
     if (e.key === 'Enter' && !e.shiftKey && blockOf()?.closest('ul.checklist')) {
       setTimeout(() => { const li = blockOf(); if (li?.tagName === 'LI') li.setAttribute('data-checked', 'false'); }, 0);
     }
@@ -1096,7 +1125,7 @@ function makeEditor(editor, onChange) {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       e.stopPropagation();
-      askLink(editor, changed);
+      if (!pre) askLink(editor, changed);
     }
   });
 
@@ -1114,7 +1143,8 @@ function makeEditor(editor, onChange) {
     const html = e.clipboardData.getData('text/html');
     const text = e.clipboardData.getData('text/plain');
     e.preventDefault();
-    if (html) document.execCommand('insertHTML', false, cleanHTML(html));
+    if (blockOf()?.closest('pre')) document.execCommand('insertText', false, text);
+    else if (html) document.execCommand('insertHTML', false, cleanHTML(html));
     else document.execCommand('insertText', false, text);
     changed();
   });
@@ -1141,6 +1171,103 @@ function placeCaretEnd(el) {
   const s = getSelection();
   s.removeAllRanges();
   s.addRange(r);
+}
+
+/* ---------- блок кода: внутри только обычный текст ---------- */
+function codeText(pre) {
+  const c = pre.cloneNode(true);
+  $$('br', c).forEach((br) => br.replaceWith('\n'));
+  $$('li, p, div, h1, h2, h3, blockquote', c).forEach((el) => { if (el.nextElementSibling || el.nextSibling) el.append('\n'); });
+  return c.textContent.replace(/\u00a0/g, ' ');
+}
+// убирает любое форматирование внутри <pre>; в конце — служебный перенос, чтобы пустая последняя строка была видна
+function flattenCode(pre) {
+  pre.textContent = codeText(pre).replace(/\n$/, '') + '\n';
+}
+function caretOffsetIn(pre) {
+  const sel = getSelection();
+  const r = document.createRange();
+  r.selectNodeContents(pre);
+  r.setEnd(sel.anchorNode, sel.anchorOffset);
+  return r.toString().length;
+}
+function setCaretIn(pre, offset) {
+  const node = pre.firstChild || pre.appendChild(document.createTextNode('\n'));
+  const r = document.createRange();
+  r.setStart(node, Math.min(offset, node.length));
+  r.collapse(true);
+  const sel = getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+function caretOnLastLine(pre) {
+  const t = pre.textContent.replace(/\n$/, '');
+  return !t.slice(caretOffsetIn(pre)).includes('\n');
+}
+function exitCode(pre, removeEmptyLastLine = false) {
+  if (removeEmptyLastLine) { pre.textContent = pre.textContent.replace(/\n\n$/, '\n'); }
+  let next = pre.nextElementSibling;
+  if (!next || next.tagName !== 'P' || next.textContent.trim()) {
+    next = document.createElement('p');
+    next.innerHTML = '<br>';
+    pre.after(next);
+  }
+  const r = document.createRange();
+  r.setStart(next, 0);
+  r.collapse(true);
+  getSelection().removeAllRanges();
+  getSelection().addRange(r);
+}
+// Enter — новая строка кода; Enter на пустой последней строке (или Shift+Enter) — выйти из блока
+function codeEnter(editor, pre, exit) {
+  const o = caretOffsetIn(pre);
+  flattenCode(pre);                         // теперь в pre один текстовый узел со служебным \n в конце
+  const body = pre.textContent.slice(0, -1);
+  const pos = Math.min(o, body.length);
+  const atEnd = pos >= body.length;
+  if (exit) return exitCode(pre);
+  if (atEnd && body === '') {               // Enter в пустом блоке — он становится обычным абзацем
+    const p = document.createElement('p');
+    p.innerHTML = '<br>';
+    pre.replaceWith(p);
+    const r = document.createRange();
+    r.setStart(p, 0);
+    r.collapse(true);
+    getSelection().removeAllRanges();
+    getSelection().addRange(r);
+    return;
+  }
+  if (atEnd && body.endsWith('\n')) return exitCode(pre, true);
+  pre.textContent = body.slice(0, pos) + '\n' + body.slice(pos) + '\n';
+  setCaretIn(pre, pos + 1);
+}
+function toggleCode(editor, blk) {
+  const pre = blk?.closest('pre');
+  if (pre) {
+    // снять «код»: каждая строка становится обычным абзацем
+    const lines = pre.textContent.replace(/\n$/, '').split('\n');
+    const ps = lines.map((l) => { const p = document.createElement('p'); if (l) p.textContent = l; else p.innerHTML = '<br>'; return p; });
+    pre.replaceWith(...ps);
+    const r = document.createRange();
+    r.setStart(ps[0], 0);
+    r.collapse(true);
+    getSelection().removeAllRanges();
+    getSelection().addRange(r);
+    return;
+  }
+  // в коде не бывает списков и цитат — сначала снимаем их
+  const ul = blk?.closest('ul, ol');
+  if (ul) document.execCommand(ul.tagName === 'OL' ? 'insertOrderedList' : 'insertUnorderedList');
+  if (blk?.closest('blockquote')) document.execCommand('formatBlock', false, '<p>');
+  document.execCommand('formatBlock', false, '<pre>');
+  const sel = getSelection();
+  const node = sel.anchorNode?.nodeType === 1 ? sel.anchorNode : sel.anchorNode?.parentElement;
+  const nu = node?.closest('pre');
+  if (nu && editor.contains(nu)) {
+    const o = caretOffsetIn(nu);
+    flattenCode(nu);
+    setCaretIn(nu, o);
+  }
 }
 
 function toggleChecklist(editor, blk) {
