@@ -341,14 +341,14 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .panel .page-title { font-size: 26px; margin: 0; }
 .props { display: grid; grid-template-columns: 110px 1fr; gap: 10px 12px; align-items: center; font-size: 14px; }
 .props > span { color: var(--muted); }
-.props select, .props input { height: 34px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); padding: 0 10px; max-width: 240px; width: 100%; }
-.props select {
+.props select, .props input, .st-default select { height: 34px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); padding: 0 10px; max-width: 240px; width: 100%; }
+.props select, .st-default select {
   appearance: none; -webkit-appearance: none; padding-right: 32px; color: var(--fg); cursor: pointer;
   background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7 10l5 5 5-5' fill='none' stroke='%23939c97' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") right 9px center / 16px no-repeat;
 }
-.props select:hover { background-color: var(--hover); }
-.props select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.props select option { background: var(--surface); color: var(--fg); }
+.props select:hover, .st-default select:hover { background-color: var(--hover); }
+.props select:focus, .st-default select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.props select option, .st-default select option { background: var(--surface); color: var(--fg); }
 .prop-text { color: var(--fg); padding: 0 11px; font-variant-numeric: tabular-nums; }
 .date-btn {
   display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; max-width: 240px; width: 100%;
@@ -682,6 +682,12 @@ svg.i.filled { fill: currentColor; }
 .st-color.on { color: #fff; box-shadow: 0 0 0 2px var(--fg); }
 .st-color svg.i { width: 14px; height: 14px; stroke-width: 3; }
 .st-actions { justify-content: space-between; }
+.st-default {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; padding-top: 16px;
+  border-top: 1px solid var(--line); font-size: 14px;
+}
+.st-default label { color: var(--muted); }
+.st-default select { flex: 1; min-width: 180px; max-width: none; height: 36px; font: inherit; }
 
 /* ---------- notes home v2: без дубля заголовка, карточки «Недавно изменённые», иконки заметок ---------- */
 /* На главных разделов верхняя полоса нужна только на телефоне — для кнопки меню */

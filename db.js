@@ -96,6 +96,8 @@ addColumn('tasks', 'favorite_at', 'TEXT');
 addColumn('pages', 'deleted_at', 'TEXT');
 addColumn('pages', 'deleted_batch', 'INTEGER');
 db.exec('CREATE INDEX IF NOT EXISTS idx_pages_trash ON pages(user_id, deleted_batch)');
+// Статус, в который попадают новые задачи (у пользователя максимум один; если не выбран — «Нужно сделать»)
+addColumn('task_statuses', 'is_default', 'INTEGER NOT NULL DEFAULT 0');
 
 // Старые базы: в tasks было ограничение CHECK на три статуса — пересоздаём таблицу без него
 const tasksSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").get().sql;

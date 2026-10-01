@@ -375,14 +375,19 @@ const FIXED_STATUSES = ['todo', 'done'];
 const MAX_STATUSES = 12;
 
 function listStatuses(userId) {
-  let rows = db.prepare('SELECT key, name, color, position FROM task_statuses WHERE user_id = ? ORDER BY position, id').all(userId);
+  const sql = 'SELECT key, name, color, position, is_default FROM task_statuses WHERE user_id = ? ORDER BY position, id';
+  let rows = db.prepare(sql).all(userId);
   if (!rows.length) {
     const ins = db.prepare('INSERT OR IGNORE INTO task_statuses (user_id, key, name, color, position) VALUES (?, ?, ?, ?, ?)');
     db.transaction(() => DEFAULT_STATUSES.forEach(([k, n, c], i) => ins.run(userId, k, n, c, i)))();
-    rows = db.prepare('SELECT key, name, color, position FROM task_statuses WHERE user_id = ? ORDER BY position, id').all(userId);
+    rows = db.prepare(sql).all(userId);
   }
-  return rows.map((r) => ({ ...r, fixed: FIXED_STATUSES.includes(r.key) }));
+  // Статус по умолчанию: выбранный пользователем, иначе «Нужно сделать». «Готово» им быть не может
+  const chosen = rows.find((r) => r.is_default && r.key !== 'done');
+  const defKey = chosen ? chosen.key : 'todo';
+  return rows.map(({ is_default, ...r }) => ({ ...r, fixed: FIXED_STATUSES.includes(r.key), default: r.key === defKey }));
 }
+const defaultStatus = (userId) => (listStatuses(userId).find((s) => s.default) || { key: 'todo' }).key;
 const statusExists = (userId, key) => listStatuses(userId).some((s) => s.key === key);
 const cleanStatusName = (v) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
 const nameTaken = (userId, name, exceptKey) =>
@@ -400,7 +405,7 @@ app.post('/api/tasks', auth, (req, res) => {
   const b = req.body || {};
   const title = String(b.title || '').trim().slice(0, 300);
   if (!title) return httpError(res, 400, 'Напишите название задачи');
-  const status = b.status && statusExists(req.user.id, b.status) ? b.status : 'todo';
+  const status = b.status && statusExists(req.user.id, b.status) ? b.status : defaultStatus(req.user.id);
   const priority = PRIORITIES.includes(b.priority) ? b.priority : 'medium';
   const due = validDate(b.due_date) && b.due_date ? b.due_date : null;
   const pos = db.prepare('SELECT COALESCE(MIN(position), 1) - 1 AS p FROM tasks WHERE user_id = ? AND status = ?')
@@ -498,7 +503,14 @@ app.patch('/api/statuses/:key', auth, (req, res) => {
     if (!STATUS_COLORS.includes(b.color)) return httpError(res, 400, 'Неизвестный цвет');
     color = b.color;
   }
-  db.prepare('UPDATE task_statuses SET name = ?, color = ? WHERE user_id = ? AND key = ?').run(name, color, req.user.id, s.key);
+  if (b.default !== undefined && b.default !== true) return httpError(res, 400, 'Выберите другой статус по умолчанию');
+  if (b.default === true && s.key === 'done') return httpError(res, 400, 'Новые задачи не могут сразу попадать в «Готово»');
+  db.transaction(() => {
+    db.prepare('UPDATE task_statuses SET name = ?, color = ? WHERE user_id = ? AND key = ?').run(name, color, req.user.id, s.key);
+    if (b.default === true) {
+      db.prepare('UPDATE task_statuses SET is_default = (key = ?) WHERE user_id = ?').run(s.key, req.user.id);
+    }
+  })();
   res.json(listStatuses(req.user.id));
 });
 

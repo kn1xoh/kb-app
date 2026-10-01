@@ -1277,6 +1277,7 @@ function renderTasks() {
       input.value = '';
       renderTasksBody();
       updateCounts();
+      openTaskPanel(t.id, { justCreated: true });
     } catch (err) { fail(err); }
   };
   renderTasksBody();
@@ -1367,10 +1368,11 @@ $('#app').addEventListener('click', async (e) => {
       ev.preventDefault();
       if (!input.value.trim()) return;
       try {
-        S.tasks.push(await api('POST', '/api/tasks', { title: input.value.trim(), status }));
+        const t = await api('POST', '/api/tasks', { title: input.value.trim(), status });
+        S.tasks.push(t);
         updateCounts();
         renderTasksBody();
-        $(`[data-status="${status}"] [data-add]`)?.click();
+        openTaskPanel(t.id, { justCreated: true });
       } catch (err) { fail(err); }
     };
     input.onblur = () => setTimeout(() => { if (document.contains(form) && !input.value.trim()) renderTasksBody(); }, 150);
@@ -1440,7 +1442,7 @@ function setupBoardDnD(root) {
   });
 }
 
-function openTaskPanel(id) {
+function openTaskPanel(id, { justCreated = false } = {}) {
   const t = S.tasks.find((x) => x.id === id);
   if (!t) return;
   closeOverlays();
@@ -1531,7 +1533,9 @@ function openTaskPanel(id) {
       toast('Задача удалена');
     } catch (e) { fail(e); }
   };
-  if (!t.description) setTimeout(() => title.focus(), 50);
+  // Только что созданная задача: название уже написано — сразу ставим курсор в описание
+  if (justCreated) setTimeout(() => desc.focus(), 50);
+  else if (!t.description) setTimeout(() => title.focus(), 50);
 }
 
 /* =========================================================
@@ -1820,8 +1824,12 @@ function confirmDialog({ title, text, okText = 'Ок', danger = false }) {
 function openStatusesDialog({ focus = null } = {}) {
   const m = openModal(`
     <h2>Статусы задач</h2>
-    <p>Статусы — это колонки на доске и группы в списке. «${esc(statusOf('todo').name)}» и «${esc(statusOf('done').name)}» нельзя удалить: в первый попадают новые задачи, во второй — отмеченные галочкой. Их можно переименовать и перекрасить.</p>
+    <p>Статусы — это колонки на доске и группы в списке. «${esc(statusOf('todo').name)}» и «${esc(statusOf('done').name)}» нельзя удалить: в первый возвращаются задачи, с которых сняли галочку, во второй — отмеченные галочкой. Их можно переименовать и перекрасить.</p>
     <div class="st-list" id="st-list"></div>
+    <div class="st-default">
+      <label for="st-default">Новые задачи попадают в</label>
+      <select id="st-default"></select>
+    </div>
     <div class="modal-actions st-actions">
       <button type="button" class="btn" id="st-add">${icon('plus')}Добавить статус</button>
       <button type="button" class="btn primary" data-close>Готово</button>
@@ -1850,6 +1858,9 @@ function openStatusesDialog({ focus = null } = {}) {
           `<button type="button" class="st-color ${c === st.color ? 'on' : ''}" data-color="${c}" style="background:var(--st-${c})" title="${title}" aria-label="${title}" aria-pressed="${c === st.color}">${icon('check')}</button>`).join('')}</div>` : ''}
       </div>`;
     }).join('');
+    // «Готово» не предлагаем: новая задача не может быть сразу выполненной
+    $('#st-default', m).innerHTML = S.statuses.filter((st) => st.key !== 'done')
+      .map((st) => `<option value="${st.key}" ${st.default ? 'selected' : ''}>${esc(st.name)}</option>`).join('');
     $('#st-add', m).disabled = S.statuses.length >= 12;
     $('#st-add', m).title = S.statuses.length >= 12 ? 'Статусов может быть не больше 12' : '';
   }
@@ -1872,6 +1883,8 @@ function openStatusesDialog({ focus = null } = {}) {
       // Без полной перерисовки, чтобы не сбить фокус, если пользователь уже перешёл к другому полю
       S.statuses = await api('PATCH', `/api/statuses/${key}`, { name });
       input.value = statusOf(key).name;
+      const opt = $(`#st-default option[value="${key}"]`, m);
+      if (opt) opt.textContent = statusOf(key).name;
       refreshOutside();
     } catch (e) { input.value = st.name; fail(e); }
   };
@@ -1923,7 +1936,7 @@ function openStatusesDialog({ focus = null } = {}) {
         const statuses = await api('DELETE', `/api/statuses/${key}`);
         if (n) S.tasks = await api('GET', '/api/tasks');
         apply(statuses);
-        toast(`Статус «${st.name}» удалён`);
+        toast(st.default ? `Статус «${st.name}» удалён. Новые задачи теперь попадают в «${statusOf('todo').name}»` : `Статус «${st.name}» удалён`);
         $('#st-add', m).focus(); // фокус внутрь окна, чтобы Esc продолжал его закрывать
       } catch (err) { fail(err); }
     }
@@ -1943,6 +1956,12 @@ function openStatusesDialog({ focus = null } = {}) {
     } catch (err) { fail(err); }
   };
   $('#st-add', m).onclick = addStatus;
+  $('#st-default', m).onchange = async (e) => {
+    try {
+      apply(await api('PATCH', `/api/statuses/${e.target.value}`, { default: true }));
+      toast(`Новые задачи будут попадать в «${statusOf(e.target.value).name}»`);
+    } catch (err) { draw(); fail(err); }
+  };
 
   draw();
   if (focus) focusName(focus, true);
