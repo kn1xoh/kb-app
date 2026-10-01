@@ -14,12 +14,17 @@ if (password.length < 8) {
 }
 
 const hash = bcrypt.hashSync(password, 10);
-const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
-if (existing) {
+const existing = db.prepare('SELECT id, kdf_salt FROM users WHERE email = ?').get(email);
+if (existing?.kdf_salt) {
+  // Заметки зашифрованы ключом из пароля: новый пароль отсюда задать нельзя, иначе данные не откроются
+  console.log('У этого аккаунта заметки зашифрованы, поэтому задать пароль отсюда нельзя.');
+  console.log('Восстановите доступ на экране входа: «Забыли пароль?» и код восстановления.');
+  process.exit(1);
+} else if (existing) {
   db.prepare('UPDATE users SET password_hash = ?, is_admin = 1 WHERE id = ?').run(hash, existing.id);
   db.prepare('DELETE FROM sessions WHERE user_id = ?').run(existing.id);
   console.log(`Пароль обновлён, ${email} теперь администратор`);
 } else {
-  db.prepare('INSERT INTO users (email, name, password_hash, is_admin) VALUES (?, ?, ?, 1)').run(email, name, hash);
-  console.log(`Администратор ${email} создан`);
+  db.prepare('INSERT INTO users (email, name, password_hash, is_admin) VALUES (?, ?, ?, 1)').run(email.trim().toLowerCase(), name, hash);
+  console.log(`Администратор ${email} создан. При первом входе он получит код восстановления, а заметки зашифруются`);
 }

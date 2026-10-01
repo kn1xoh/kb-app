@@ -12,7 +12,8 @@ const dataDir = process.env.DATA_DIR || path.join(__dirname, 'data');
 fs.mkdirSync(dataDir, { recursive: true });
 
 const db = new DatabaseSync(path.join(dataDir, 'kb.sqlite'));
-db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+// secure_delete: удалённое и перезаписанное затирается нулями — после шифрования старый открытый текст не остаётся в файле
+db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;');
 
 db.transaction = (fn) => (...args) => {
   db.exec('BEGIN');
@@ -130,6 +131,35 @@ if (db.prepare("SELECT 1 FROM task_statuses WHERE key = 'done' UNION SELECT 1 FR
     db.exec("DELETE FROM task_statuses WHERE key = 'done'");
   })();
 }
+
+// Шифрование в браузере. Сервер хранит только то, что не раскрывает данные:
+// kdf_salt — соль для пароля; wrapped_key — ключ данных, зашифрованный ключом из пароля;
+// rec_* — то же для кода восстановления. password_hash / rec_hash — bcrypt от «пароля для входа»,
+// который браузер выводит из пароля (кода) отдельно от ключа шифрования. Пустой kdf_salt — старый аккаунт
+// без шифрования: при первом входе браузер создаст ключи и зашифрует заметки и задачи.
+addColumn('users', 'kdf_salt', 'TEXT');
+addColumn('users', 'wrapped_key', 'TEXT');
+addColumn('users', 'rec_salt', 'TEXT');
+addColumn('users', 'rec_wrapped', 'TEXT');
+addColumn('users', 'rec_hash', 'TEXT');
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS invites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  expires_at TEXT NOT NULL,
+  used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  used_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+`);
 
 db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
 

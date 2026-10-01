@@ -121,7 +121,33 @@ function dueLong(d) {
 const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 
+// Названия и тексты заметок и задач шифруются в браузере: api() шифрует поля title / content / description
+// перед отправкой и расшифровывает всё, что пришло зашифрованным. Пустая строка остаётся пустой —
+// по ней сервер понимает, что названия или текста нет.
+const SECRET_FIELDS = new Set(['title', 'content', 'description']);
+async function sealBody(v) {
+  if (Array.isArray(v)) return Promise.all(v.map(sealBody));
+  if (!v || typeof v !== 'object') return v;
+  const out = {};
+  await Promise.all(Object.entries(v).map(async ([k, x]) => {
+    out[k] = SECRET_FIELDS.has(k) && typeof x === 'string' && x && !Vault.isSealed(x) ? await Vault.encrypt(x) : await sealBody(x);
+  }));
+  return out;
+}
+async function openBody(v, k = '') {
+  if (Vault.isSealed(v)) {
+    const text = await Vault.decrypt(v);
+    return k === 'content' || k === 'description' ? cleanHtml(text) : text;
+  }
+  if (Array.isArray(v)) return Promise.all(v.map((x) => openBody(x, k)));
+  if (!v || typeof v !== 'object') return v;
+  const out = {};
+  await Promise.all(Object.entries(v).map(async ([key, x]) => { out[key] = await openBody(x, key); }));
+  return out;
+}
+
 async function api(method, url, body) {
+  if (body !== undefined && Vault.ready()) body = await sealBody(body);
   const res = await fetch(url, {
     method,
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'kb' },
@@ -131,7 +157,74 @@ async function api(method, url, body) {
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && S.user) { S.user = null; renderAuth(); }
   if (!res.ok) throw new Error(data.error || 'Что-то пошло не так. Попробуйте ещё раз');
-  return data;
+  return Vault.ready() ? openBody(data) : data;
+}
+
+// Запросы при закрытии вкладки уходят синхронно, а шифрование асинхронное. Поэтому тексты шифруются
+// заранее, пока человек печатает (preseal), а при закрытии берётся уже готовый шифр.
+const presealed = new Map();
+function preseal(...texts) {
+  if (!Vault.ready()) return;
+  texts.forEach((t) => {
+    if (!t || presealed.has(t)) return;
+    Vault.encrypt(t).then((c) => {
+      presealed.set(t, c);
+      while (presealed.size > 40) presealed.delete(presealed.keys().next().value);
+    });
+  });
+}
+function sealNow(body) {
+  const out = {};
+  for (const [k, v] of Object.entries(body)) {
+    if (SECRET_FIELDS.has(k) && typeof v === 'string' && v) {
+      if (!presealed.has(v)) return null;
+      out[k] = presealed.get(v);
+    } else out[k] = v;
+  }
+  return out;
+}
+
+// ---------- HTML и текст заметок ----------
+// Сервер больше не видит текст, поэтому чистит HTML браузер (те же правила, что были на сервере)
+const HTML_TAGS = new Set(['P', 'BR', 'H1', 'H2', 'H3', 'STRONG', 'B', 'EM', 'I', 'U', 'S', 'STRIKE',
+  'UL', 'OL', 'LI', 'BLOCKQUOTE', 'PRE', 'CODE', 'A', 'HR', 'DIV', 'SPAN']);
+const HTML_DROP = new Set(['SCRIPT', 'STYLE', 'TEXTAREA', 'OPTION', 'NOSCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'TEMPLATE', 'SVG', 'MATH']);
+function cleanHtml(html) {
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+  const walk = (el) => [...el.childNodes].forEach((n) => {
+    if (n.nodeType === 3) return;
+    if (n.nodeType !== 1) { n.remove(); return; }
+    if (HTML_DROP.has(n.tagName)) { n.remove(); return; }
+    walk(n);
+    if (!HTML_TAGS.has(n.tagName)) { n.replaceWith(...n.childNodes); return; }
+    [...n.attributes].forEach((a) => {
+      const keep = (n.tagName === 'A' && a.name === 'href') || (n.tagName === 'UL' && a.name === 'class')
+        || (n.tagName === 'LI' && a.name === 'data-checked');
+      if (!keep) n.removeAttribute(a.name);
+    });
+    if (n.tagName === 'A') {
+      const href = n.getAttribute('href') || '';
+      if (href && !/^(https?:|mailto:|tel:)/i.test(href.trim())) n.removeAttribute('href');
+      n.setAttribute('target', '_blank');
+      n.setAttribute('rel', 'noopener noreferrer');
+    }
+    if (n.tagName === 'UL' && n.getAttribute('class') && n.getAttribute('class') !== 'checklist') n.removeAttribute('class');
+  });
+  walk(doc.body);
+  return doc.body.innerHTML;
+}
+// Текст без разметки; строки — по блокам
+function htmlText(html) {
+  const doc = new DOMParser().parseFromString(String(html || '').replace(/<\/(p|div|h\d|li|pre|blockquote)>|<br\s*\/?>/gi, '$&\n'), 'text/html');
+  return doc.body.textContent.replace(/\u00a0/g, ' ');
+}
+// Первая непустая строка — для названия (не длиннее 80 символов, режем по слову)
+function firstLine(html) {
+  const line = htmlText(html).split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).find(Boolean) || '';
+  if (line.length <= 80) return line;
+  const cut = line.slice(0, 80);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > 40 ? cut.slice(0, space) : cut).replace(/[\s.,;:!?—–-]+$/, '')}…`;
 }
 
 // action: { label, fn } — кнопка в уведомлении (например «Отменить»); такое уведомление висит дольше
@@ -188,57 +281,258 @@ const themeChoice = () => store.get('kb-theme-choice', 'system');
    Auth
    ========================================================= */
 async function boot() {
+  if (!window.crypto?.subtle) {
+    return authScreen('Нужен защищённый адрес', 'Silo шифрует заметки прямо в браузере, а браузер разрешает это только на сайтах с https:// (и на localhost). Откройте Silo по адресу, который начинается с https://.', '');
+  }
   try {
+    const invite = location.hash.match(/^#\/invite\/([\w-]+)/)?.[1];
     const { user, needsSetup } = await api('GET', '/api/me');
-    if (user) { S.user = user; await startApp(); } else renderAuth(needsSetup);
+    if (user?.encrypted && await Vault.load(user.id)) {
+      if (invite) {
+        history.replaceState(null, '', '/');
+        toast('Вы уже вошли в Silo. Чтобы зарегистрироваться по приглашению, сначала выйдите из аккаунта');
+      }
+      S.user = user;
+      return startApp();
+    }
+    // Вошли, но ключа шифрования на этом устройстве нет (или аккаунт ещё без шифрования) — нужен пароль
+    if (user) await api('POST', '/api/logout').catch(() => {});
+    if (invite) return renderInvite(invite);
+    renderAuth(needsSetup);
   } catch (e) {
     $('#app').innerHTML = `<div class="auth"><div class="auth-card"><h1>Сервер недоступен</h1><p>${esc(e.message)}</p></div></div>`;
   }
 }
 
-function renderAuth(setup = false) {
+function authScreen(title, sub, body) {
   closeOverlays();
   $('#app').innerHTML = `
     <main class="auth">
       <div class="auth-card">
         <div class="auth-brand"><div class="logo">${LOGO}</div><b class="brand-name">Silo</b></div>
-        <div style="display:grid;gap:6px">
-          <h1>${setup ? 'Создайте аккаунт администратора' : 'Вход в аккаунт'}</h1>
-          <p>${setup ? 'Это первый запуск. Администратор создаёт аккаунты для остальных пользователей.' : 'Аккаунт выдаёт администратор. Если забыли пароль, обратитесь к нему.'}</p>
-        </div>
-        <form id="auth-form" novalidate>
-          ${setup ? '<label class="field"><span>Имя</span><input class="input" id="a-name" autocomplete="name"></label>' : ''}
-          <label class="field"><span>Email</span><input class="input" id="a-email" type="email" autocomplete="username" required></label>
-          <label class="field"><span>Пароль${setup ? ' (не короче 8 символов)' : ''}</span><input class="input" id="a-pass" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required></label>
-          <p class="error-text" id="a-err"></p>
-          <button class="btn primary" type="submit">${setup ? 'Создать и войти' : 'Войти'}</button>
-        </form>
+        <div style="display:grid;gap:6px"><h1>${title}</h1>${sub ? `<p>${sub}</p>` : ''}</div>
+        ${body}
       </div>
     </main>`;
-  $('#a-email').focus();
-  $('#auth-form').addEventListener('submit', async (e) => {
+}
+const authField = (id, label, type = 'text', auto = 'off', extra = '') =>
+  `<label class="field"><span>${label}</span><input class="input" id="${id}" type="${type}" autocomplete="${auto}" ${extra}></label>`;
+const MIN_PASSWORD = 8;
+
+// Общая отправка формы: кнопка выключена, пока идёт запрос; ошибка — под полями
+function authSubmit(run) {
+  const form = $('#auth-form');
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const btn = e.submitter || $('#auth-form button');
+    const btn = $('button[type=submit]', form);
+    const text = btn.textContent;
     btn.disabled = true;
     $('#a-err').textContent = '';
-    try {
-      const body = { email: $('#a-email').value, password: $('#a-pass').value };
-      if (setup) body.name = $('#a-name').value;
-      const { user } = await api('POST', setup ? '/api/setup' : '/api/login', body);
-      S.user = user;
-      await startApp();
-    } catch (err) {
+    try { await run(btn); } catch (err) {
       $('#a-err').textContent = err.message;
       btn.disabled = false;
+      btn.textContent = text;
     }
   });
 }
+function checkNewPassword(p1, p2) {
+  if (p1.length < MIN_PASSWORD) throw new Error(`Пароль должен быть не короче ${MIN_PASSWORD} символов`);
+  if (p1 !== p2) throw new Error('Пароли не совпадают');
+}
+
+function renderAuth(setup = false) {
+  if (setup) return renderNewAccount({ setup: true });
+  authScreen('Вход в аккаунт', 'Нет аккаунта? Попросите приглашение у администратора.', `
+    <form id="auth-form" novalidate>
+      ${authField('a-email', 'Email', 'email', 'username')}
+      <label class="field"><span class="field-head">Пароль<button type="button" class="link-btn" id="a-forgot">Забыли пароль?</button></span>
+        <input class="input" id="a-pass" type="password" autocomplete="current-password"></label>
+      <p class="error-text" id="a-err"></p>
+      <button class="btn primary" type="submit">Войти</button>
+    </form>`);
+  $('#a-email').focus();
+  $('#a-forgot').onclick = () => renderForgot($('#a-email').value);
+  authSubmit(async (btn) => {
+    const email = $('#a-email').value.trim();
+    const password = $('#a-pass').value;
+    if (!email || !password) throw new Error('Введите email и пароль');
+    btn.textContent = 'Вход…';
+    const pre = await api('POST', '/api/prelogin', { email });
+    if (pre.legacy) {
+      // Аккаунт создан до шифрования: входим по паролю и сразу включаем шифрование
+      const { user } = await api('POST', '/api/login', { email, password });
+      await Vault.create();
+      const code = Vault.newCode();
+      await api('POST', '/api/me/keys', { ...await Vault.passwordKeys(password), ...await Vault.recoveryKeys(code) });
+      await Vault.save(user.id);
+      return renderCodeScreen(code, user.email, () => enterApp({ ...user, encrypted: true }),
+        'Теперь ваши заметки и задачи шифруются — их видите только вы. Если забудете пароль, по этому коду вы сможете задать новый. Без кода и пароля восстановить заметки не сможет никто — даже администратор.');
+    }
+    const key = await Vault.login(password, pre.salt);
+    const r = await api('POST', '/api/login', { email, auth: key.auth });
+    await key.open(r.wrapped_key);
+    await Vault.save(r.user.id);
+    enterApp(r.user);
+  });
+}
+
+function enterApp(user) {
+  S.user = user;
+  history.replaceState(null, '', '/');
+  startApp();
+}
+
+// Регистрация по приглашению или первый запуск (аккаунт администратора)
+function renderNewAccount({ setup = false, token = '', inviter = '' }) {
+  const sub = setup
+    ? 'Это первый запуск. Остальных вы пригласите по ссылке — пароли они придумают сами.'
+    : `${inviter ? `Вас пригласил ${esc(inviter)}. ` : ''}Придумайте пароль — его будете знать только вы.`;
+  authScreen(setup ? 'Создайте аккаунт администратора' : 'Добро пожаловать в Silo', sub, `
+    <form id="auth-form" novalidate>
+      ${authField('a-email', 'Email', 'email', 'username')}
+      ${authField('a-name', 'Имя', 'text', 'name')}
+      ${authField('a-pass', `Пароль (не короче ${MIN_PASSWORD} символов)`, 'password', 'new-password')}
+      ${authField('a-pass2', 'Повторите пароль', 'password', 'new-password')}
+      <p class="error-text" id="a-err"></p>
+      <button class="btn primary" type="submit">Продолжить</button>
+    </form>`);
+  $('#a-email').focus();
+  authSubmit(async (btn) => {
+    const email = $('#a-email').value.trim();
+    const name = $('#a-name').value.trim();
+    const password = $('#a-pass').value;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Укажите корректный email');
+    if (!name) throw new Error('Напишите, как вас зовут');
+    checkNewPassword(password, $('#a-pass2').value);
+    btn.textContent = 'Создаём аккаунт…';
+    await Vault.create();
+    const code = Vault.newCode();
+    const keys = { ...await Vault.passwordKeys(password), ...await Vault.recoveryKeys(code) };
+    const { user } = await api('POST', setup ? '/api/setup' : '/api/register', { token, email, name, ...keys });
+    await Vault.save(user.id);
+    renderCodeScreen(code, user.email, () => enterApp(user));
+  });
+}
+
+async function renderInvite(token) {
+  try {
+    const { inviter } = await api('GET', `/api/invites/${encodeURIComponent(token)}`);
+    renderNewAccount({ token, inviter });
+  } catch (e) {
+    authScreen('Приглашение не работает', esc(e.message), '<button class="btn primary" id="a-login">Ко входу</button>');
+    $('#a-login').onclick = () => { history.replaceState(null, '', '/'); renderAuth(); };
+  }
+}
+
+function renderForgot(email = '') {
+  authScreen('Новый пароль', 'Введите email и код восстановления, который вы сохранили при регистрации.', `
+    <form id="auth-form" novalidate>
+      ${authField('a-email', 'Email', 'email', 'username')}
+      ${authField('a-code', 'Код восстановления', 'text', 'off', 'spellcheck="false" autocapitalize="characters" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX"')}
+      ${authField('a-pass', `Новый пароль (не короче ${MIN_PASSWORD} символов)`, 'password', 'new-password')}
+      ${authField('a-pass2', 'Повторите пароль', 'password', 'new-password')}
+      <p class="error-text" id="a-err"></p>
+      <button class="btn primary" type="submit">Сохранить и войти</button>
+      <button type="button" class="link-btn center" id="a-back">Вернуться ко входу</button>
+    </form>
+    <p class="auth-note">Потеряли и код? Если вы где-то ещё вошли в Silo — смените пароль там, в меню. Иначе данные восстановить нельзя.</p>`);
+  $('#a-email').value = email;
+  (email ? $('#a-code') : $('#a-email')).focus();
+  $('#a-back').onclick = () => renderAuth();
+  authSubmit(async (btn) => {
+    const em = $('#a-email').value.trim();
+    const code = $('#a-code').value;
+    const password = $('#a-pass').value;
+    if (!em || !code.trim()) throw new Error('Введите email и код восстановления');
+    checkNewPassword(password, $('#a-pass2').value);
+    btn.textContent = 'Проверяем код…';
+    const pre = await api('POST', '/api/prelogin', { email: em });
+    if (pre.legacy) throw new Error('Для этого аккаунта код восстановления ещё не создан. Войдите по паролю — код появится после входа');
+    const rec = await Vault.recovery(code, pre.rec_salt);
+    const { rec_wrapped } = await api('POST', '/api/recover/start', { email: em, rec_auth: rec.auth });
+    await rec.open(rec_wrapped);
+    const next = Vault.newCode();
+    const keys = { ...await Vault.passwordKeys(password), ...await Vault.recoveryKeys(next) };
+    const { user } = await api('POST', '/api/recover/finish', { email: em, rec_auth: rec.auth, next: keys });
+    await Vault.save(user.id);
+    renderCodeScreen(next, user.email, () => enterApp(user),
+      'Пароль изменён. Старый код больше не работает — сохраните новый. Без кода и пароля восстановить заметки не сможет никто — даже администратор.');
+  });
+}
+
+// Блок с кодом восстановления: код, «Скопировать», «Скачать файлом»
+function codeBlock(code, email) {
+  return `<div class="code-block">
+    <div class="codebox" id="rc-code">${esc(code)}</div>
+    <div class="code-actions"><button type="button" class="btn" id="rc-copy">Скопировать</button><button type="button" class="btn" id="rc-file">Скачать файлом</button></div>
+  </div>`;
+}
+function bindCodeBlock(root, code, email) {
+  $('#rc-copy', root).onclick = async () => {
+    try { await navigator.clipboard.writeText(code); toast('Код скопирован'); } catch {
+      getSelection().selectAllChildren($('#rc-code', root));
+      toast('Не удалось скопировать — код выделен, скопируйте его вручную');
+    }
+  };
+  $('#rc-file', root).onclick = () => {
+    const text = `Silo — код восстановления\r\n\r\nEmail: ${email}\r\nКод: ${code}\r\nСоздан: ${fullDateTime(new Date().toISOString())}\r\n\r\n`
+      + 'По этому коду можно задать новый пароль, если вы его забудете. Храните код в надёжном месте и никому не показывайте.\r\n';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+    a.download = 'Silo — код восстановления.txt';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+}
+
+function renderCodeScreen(code, email, done, text) {
+  authScreen('Сохраните код восстановления', text
+    || 'Если забудете пароль, по этому коду вы сможете задать новый. Без кода и пароля восстановить заметки не сможет никто — даже администратор.', `
+    ${codeBlock(code, email)}
+    <label class="ack"><input type="checkbox" id="rc-ack">Я сохранил код в надёжном месте</label>
+    <button class="btn primary" id="rc-done" disabled>Готово, войти</button>`);
+  bindCodeBlock($('#app'), code, email);
+  $('#rc-ack').onchange = (e) => { $('#rc-done').disabled = !e.target.checked; };
+  $('#rc-done').onclick = done;
+}
 
 async function startApp() {
+  await encryptLeftovers();
   [S.pages, S.tasks, S.statuses] = await Promise.all([api('GET', '/api/pages'), api('GET', '/api/tasks'), api('GET', '/api/statuses')]);
   renderShell();
   if (!location.hash) location.hash = '#/notes';
   else route();
+  fixUntitled();
+}
+
+// Открытый текст, который ещё лежит на сервере (старый аккаунт, приветственные заметки), — шифруем
+async function encryptLeftovers() {
+  try {
+    const plain = await api('GET', '/api/me/plain');
+    if (plain.pages.length || plain.tasks.length) await api('POST', '/api/me/encrypt', plain);
+  } catch (e) { fail(e); }
+}
+
+// Заметки и задачи без названия, брошенные больше получаса назад (например, закрыли вкладку):
+// название из первой строки текста, пустые удаляются. Текст зашифрован, поэтому это делает браузер.
+async function fixUntitled() {
+  const stale = (s) => Date.now() - toDate(s) > 30 * 60e3;
+  let changed = false;
+  for (const p of S.pages.filter((x) => !x.title.trim() && stale(x.updated_at) && x.id !== S.page?.id)) {
+    await finalizePage(p.id);
+    changed = true;
+  }
+  for (const t of S.tasks.filter((x) => !x.title.trim() && stale(x.updated_at))) {
+    if ($('.panel')) break;
+    const line = firstLine(t.description);
+    try {
+      const r = await api('POST', `/api/tasks/${t.id}/finalize`, line ? { title: line } : { description: '' });
+      if (r.deleted) S.tasks = S.tasks.filter((x) => x !== t);
+      else if (r.title) t.title = r.title;
+      changed = true;
+    } catch { /* попробуем в следующий раз */ }
+  }
+  if (changed && S.user) { updateCounts(); if (S.section === 'tasks') refreshTasks(); }
 }
 
 /* =========================================================
@@ -899,18 +1193,29 @@ async function flushPageSave() {
 function queuePageSave(data) {
   if (!S.page) return;
   pendingSave = { id: S.page.id, data: { ...(pendingSave?.id === S.page.id ? pendingSave.data : {}), ...data } };
+  if (data.content !== undefined) S.page.content = data.content;
+  presealPage();
   setSaveState('Изменено');
   pageSave();
 }
+// Готовим шифр для запроса при закрытии вкладки (см. preseal)
+function presealPage() {
+  if (!S.page) return;
+  const d = pendingSave?.id === S.page.id ? pendingSave.data : {};
+  const untitled = !pageById(S.page.id)?.title.trim();
+  preseal(d.title, d.content, untitled ? firstLine(S.page.content || '') : '');
+}
 function setSaveState(t) { const el = $('#save-state'); if (el) el.textContent = t; }
 
-// Заметка без названия не сохраняется: при уходе с неё сервер даёт название из первой строки текста,
-// а совсем пустую удаляет. Состояние на клиенте подтягиваем под ответ.
+// Заметка без названия не сохраняется: при уходе с неё название берётся из первой строки текста,
+// а совсем пустая удаляется. Текст зашифрован, поэтому первую строку находит браузер.
+const finalizeBody = (html) => { const line = firstLine(html || ''); return line ? { title: line } : { content: '' }; };
 async function finalizePage(id) {
   const p = pageById(id);
   if (!p || p.title.trim()) return;
   try {
-    const r = await api('POST', `/api/pages/${id}/finalize`);
+    const content = S.page?.id === id ? S.page.content : (await api('GET', `/api/pages/${id}`)).content;
+    const r = await api('POST', `/api/pages/${id}/finalize`, finalizeBody(content));
     if (r.deleted) {
       S.pages = S.pages.filter((x) => x.id !== id);
       S.expanded.delete(id);
@@ -924,14 +1229,16 @@ window.addEventListener('beforeunload', () => {
   $('.panel')?.unloadFn?.();
   const data = pendingSave?.data || {};
   // заметка без названия — один запрос, который и сохраняет, и даёт название (или удаляет пустую)
-  if (S.page && !pageById(S.page.id)?.title.trim()) sendNow('POST', `/api/pages/${S.page.id}/finalize`, data);
+  if (S.page && !pageById(S.page.id)?.title.trim()) sendNow('POST', `/api/pages/${S.page.id}/finalize`, { ...data, ...finalizeBody(S.page.content) });
   else if (pendingSave) sendNow('PATCH', `/api/pages/${pendingSave.id}`, data);
 });
 function sendNow(method, url, body) {
+  const sealed = Vault.ready() ? sealNow(body) : body;
+  if (!sealed) return; // шифр ещё не готов — недописанное название подхватится при следующем входе
   fetch(url, {
     method, keepalive: true, credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'kb' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(sealed),
   });
 }
 
@@ -966,6 +1273,7 @@ async function openPage(id) {
     const p = pageById(id);
     if (p) p.title = title.value;
     queuePageSave({ title: title.value });
+    preseal(title.value);
     renderTree();
     renderCrumbs();
   });
@@ -977,6 +1285,7 @@ async function openPage(id) {
   $('#page-more').onclick = (e) => openPageMenu(e.currentTarget, id);
   updatePageFavButton();
   $('#page-fav').onclick = () => setPageFavorite(pageById(id) || S.page, !S.page.favorite_at);
+  presealPage();
   if (!page.title && !page.content) title.focus();
 }
 
@@ -2125,13 +2434,19 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     }
     return (closed = finalizeTask());
   };
-  // Задача без названия не остаётся (как заметки): сервер даёт название из первой строки описания,
-  // а без текста удаляет насовсем. Несохранённое описание уходит тем же запросом.
+  // Задача без названия не остаётся (как заметки): название — из первой строки описания,
+  // без текста задача удаляется насовсем. Несохранённое описание уходит тем же запросом.
+  const finalBody = () => {
+    const html = serializeEditor(desc);
+    const line = firstLine(html);
+    const body = descDirty ? { description: html } : {};
+    return line ? { ...body, title: line } : { ...body, description: '' };
+  };
   const finalizeTask = async () => {
     saveTitle.cancel();
     saveDesc.cancel();
     if (!S.tasks.includes(t)) return;
-    const body = descDirty ? { description: serializeEditor(desc) } : {};
+    const body = finalBody();
     descDirty = false;
     const hasText = !!desc.textContent.trim();
     if (!hasText) { S.tasks = S.tasks.filter((x) => x !== t); refreshTasks(); updateCounts(); }
@@ -2152,7 +2467,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     const body = descDirty ? { description: serializeEditor(desc) } : {};
     const v = title.value.trim();
     if (v && v !== t.title) body.title = v;
-    if (!v && !t.title.trim()) sendNow('POST', `/api/tasks/${t.id}/finalize`, body);
+    if (!v && !t.title.trim()) sendNow('POST', `/api/tasks/${t.id}/finalize`, finalBody());
     else if (Object.keys(body).length) sendNow('PATCH', `/api/tasks/${t.id}`, body);
   };
   // Перед завершением или удалением дожидаемся сохранения, чтобы не потерять последние правки
@@ -2184,7 +2499,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     if (v && v !== t.title && S.tasks.includes(t)) update({ title: v });
   };
   const saveTitle = debounce(saveTitleNow, 500);
-  title.oninput = () => { grow(); if (title.value.trim()) markDirty(); saveTitle(); };
+  title.oninput = () => { grow(); if (title.value.trim()) markDirty(); saveTitle(); preseal(title.value.trim()); };
   // Enter в названии — переход к описанию
   title.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); saveTitleNow(); desc.focus(); } };
   const statusSel = $('#tp-status', panel);
@@ -2214,7 +2529,10 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   };
   const saveDesc = debounce(saveDescNow, 700);
   saveDesc.flush = () => { saveDesc.cancel(); saveDescNow(); };
-  $('#tp-toolbar', panel).replaceWith(makeEditor(desc, () => { descDirty = true; markDirty(); saveDesc(); }));
+  // шифр для запроса при закрытии вкладки готовим заранее (см. preseal)
+  const presealDesc = () => { const h = serializeEditor(desc); preseal(h, firstLine(h)); };
+  $('#tp-toolbar', panel).replaceWith(makeEditor(desc, () => { descDirty = true; markDirty(); saveDesc(); presealDesc(); }));
+  presealDesc();
 
   // Завершить — карточка закрывается, в уведомлении «Отменить». Вернуть в работу — карточка остаётся открытой
   $('#tp-complete', panel).onclick = async () => {
@@ -2292,10 +2610,23 @@ function openSearch() {
       .map((p) => ({ id: p.id, title: p.title, snippet: 'Недавно изменена' }));
     draw('', { pages, tasks: [] });
   };
+  // Заметки и задачи зашифрованы, поэтому ищем в браузере: при открытии поиска загружаем всё один раз
+  let index = null;
+  const loadIndex = async () => {
+    if (index) return index;
+    const data = await api('GET', '/api/search-index');
+    const flat = (h) => htmlText(h).replace(/\s+/g, ' ').trim();
+    data.pages.forEach((p) => { p.text = flat(p.content); });
+    data.tasks.forEach((t) => { t.text = flat(t.description); });
+    return (index = data);
+  };
   const search = debounce(async () => {
     const q = input.value.trim();
     if (!q) return recent();
-    try { draw(q, await api('GET', `/api/search?q=${encodeURIComponent(q)}`)); } catch (e) { fail(e); }
+    try {
+      const data = await loadIndex();
+      if (input.value.trim() === q) draw(q, searchIndex(data, q));
+    } catch (e) { fail(e); }
   }, 160);
   input.oninput = search;
   input.onkeydown = (e) => {
@@ -2445,6 +2776,24 @@ function openDatePicker(anchor, value, onPick) {
 }
 
 
+function searchIndex(data, q) {
+  const ql = q.toLowerCase();
+  const snip = (text) => {
+    const i = text.toLowerCase().indexOf(ql);
+    if (i < 0) return text.slice(0, 120);
+    const start = Math.max(0, i - 50);
+    const end = i + q.length + 70;
+    return (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
+  };
+  const hit = (x) => `${x.title} ${x.text}`.toLowerCase().includes(ql);
+  const newer = (a, b) => toDate(b.updated_at) - toDate(a.updated_at);
+  return {
+    pages: data.pages.filter(hit).sort(newer).slice(0, 20).map((p) => ({ id: p.id, title: p.title, snippet: snip(p.text) })),
+    tasks: data.tasks.filter(hit).sort((a, b) => !!a.completed_at - !!b.completed_at || newer(a, b)).slice(0, 20)
+      .map((t) => ({ id: t.id, title: t.title, status: t.status, completed: !!t.completed_at, snippet: snip(t.text) })),
+  };
+}
+
 function openUserMenu(anchor) {
   const cur = themeChoice();
   const seg = (v, t) => `<button data-m="theme-${v}" data-keep="1" class="${cur === v ? 'on' : ''}">${t}</button>`;
@@ -2452,7 +2801,7 @@ function openUserMenu(anchor) {
     <div class="menu-label">Тема</div>
     <div class="seg">${seg('system', 'Как в системе')}${seg('light', 'Светлая')}${seg('dark', 'Тёмная')}</div>
     <hr>
-    <button data-m="password">${icon('key')}Сменить пароль</button>
+    <button data-m="password">${icon('key')}Пароль и код восстановления</button>
     ${S.user.is_admin ? `<button data-m="users">${icon('users')}Пользователи</button>` : ''}
     <hr>
     <button data-m="logout">${icon('logout')}Выйти</button>`, async (m, btn) => {
@@ -2466,6 +2815,7 @@ function openUserMenu(anchor) {
       await flushPageSave();
       if (S.page) await finalizePage(S.page.id);
       await api('POST', '/api/logout').catch(() => {});
+      await Vault.forget(S.user.id);
       S.user = null;
       S.page = null;
       history.replaceState(null, '', '/');
@@ -2713,89 +3063,110 @@ function openStatusesDialog({ focus = null } = {}) {
   if (focus) focusName(focus, true);
 }
 
-function genPassword() {
-  const chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const arr = crypto.getRandomValues(new Uint32Array(12));
-  return [...arr].map((n) => chars[n % chars.length]).join('');
-}
-
+// Пароль и код восстановления. Старый пароль не нужен: на этом устройстве ключ шифрования уже есть,
+// так что, если пароль забыт, его можно сменить там, где вы уже вошли.
 function openPasswordDialog() {
   const m = openModal(`
-    <h2>Смена пароля</h2>
-    <form id="pw-form">
-      <label class="field"><span>Текущий пароль</span><input class="input" type="password" id="pw-cur" autocomplete="current-password"></label>
-      <label class="field"><span>Новый пароль (не короче 8 символов)</span><input class="input" type="password" id="pw-new" autocomplete="new-password"></label>
+    <h2>Пароль и код восстановления</h2>
+    <form id="pw-form" class="set-block">
+      <div class="set-caption">Новый пароль</div>
+      <label class="field"><span>Новый пароль (не короче ${MIN_PASSWORD} символов)</span><input class="input" type="password" id="pw-new" autocomplete="new-password"></label>
+      <label class="field"><span>Повторите пароль</span><input class="input" type="password" id="pw-new2" autocomplete="new-password"></label>
       <p class="error-text" id="pw-err"></p>
-      <div class="modal-actions"><button type="button" class="btn" data-close>Отмена</button><button class="btn primary">Сменить пароль</button></div>
-    </form>`);
-  $('#pw-cur', m).focus();
+      <div><button class="btn primary">Сменить пароль</button></div>
+      <p class="set-hint">Старый пароль не нужен. На других устройствах нужно будет войти заново.</p>
+    </form>
+    <div class="set-block" id="rc-slot">
+      <div class="set-caption">Код восстановления</div>
+      <p class="set-hint">Нужен, если забудете пароль. Новый код заменит старый — старый перестанет работать.</p>
+      <div><button class="btn" id="rc-new">Создать новый код</button></div>
+    </div>
+    <div class="modal-actions"><button type="button" class="btn" data-close>Готово</button></div>`);
+  $('#pw-new', m).focus();
   $('#pw-form', m).onsubmit = async (e) => {
     e.preventDefault();
+    const btn = $('#pw-form .btn.primary', m);
+    $('#pw-err', m).textContent = '';
     try {
-      await api('POST', '/api/me/password', { current: $('#pw-cur', m).value, next: $('#pw-new', m).value });
-      closeModal(m);
+      checkNewPassword($('#pw-new', m).value, $('#pw-new2', m).value);
+      btn.disabled = true;
+      await api('POST', '/api/me/keys', await Vault.passwordKeys($('#pw-new', m).value));
+      $('#pw-new', m).value = $('#pw-new2', m).value = '';
       toast('Пароль изменён');
     } catch (err) { $('#pw-err', m).textContent = err.message; }
+    btn.disabled = false;
+  };
+  $('#rc-new', m).onclick = async () => {
+    const ok = await confirmDialog({ title: 'Создать новый код?', text: 'Старый код восстановления перестанет работать.', okText: 'Создать' });
+    if (!ok) return;
+    try {
+      const code = Vault.newCode();
+      await api('POST', '/api/me/keys', await Vault.recoveryKeys(code));
+      const slot = $('#rc-slot', m);
+      slot.innerHTML = `<div class="set-caption">Код восстановления</div>
+        <p class="set-hint">Сохраните новый код: скопируйте или скачайте файлом. Старый больше не работает.</p>${codeBlock(code)}`;
+      bindCodeBlock(slot, code, S.user.email);
+    } catch (err) { fail(err); }
   };
 }
 
+// Пользователи и приглашения. Администратор не задаёт пароли и не видит чужие заметки и задачи
 async function openUsersDialog() {
   const m = openModal(`
     <h2>Пользователи</h2>
-    <p>Каждый пользователь видит только свои заметки и задачи. Создайте аккаунт и передайте человеку email и пароль.</p>
+    <p>Пригласите человека по ссылке — пароль он придумает сам. Заметки и задачи зашифрованы: их видит только владелец, даже администратор не может их прочитать.</p>
+    <div class="set-caption">Пригласить</div>
+    <form id="inv-form" class="inv-form">
+      <input class="input" id="inv-label" maxlength="60" placeholder="Для кого, например «Дима» (видно только вам)" autocomplete="off">
+      <button class="btn primary">Создать ссылку</button>
+    </form>
+    <div id="inv-new"></div>
+    <div id="inv-list"></div>
+    <div class="set-caption">Аккаунты</div>
     <div class="table-wrap" id="users-list"><p class="muted">Загрузка…</p></div>
-    <form id="user-form">
-      <h3 style="margin:8px 0 0;font-size:15px">Новый пользователь</h3>
-      <div class="inline-form">
-        <label class="field"><span>Имя</span><input class="input" id="nu-name" autocomplete="off"></label>
-        <label class="field"><span>Email</span><input class="input" id="nu-email" type="email" autocomplete="off"></label>
-        <label class="field full"><span>Пароль</span>
-          <span style="display:flex;gap:8px"><input class="input" id="nu-pass" autocomplete="off"><button type="button" class="btn" id="nu-gen">Сгенерировать</button></span>
-        </label>
-        <label class="checkbox full"><input type="checkbox" id="nu-admin"> Администратор (может управлять пользователями)</label>
-      </div>
-      <p class="error-text" id="nu-err"></p>
-      <div class="modal-actions"><button type="button" class="btn" data-close>Закрыть</button><button class="btn primary">Создать аккаунт</button></div>
-    </form>`, 'wide');
+    <div class="modal-actions"><button type="button" class="btn" data-close>Закрыть</button></div>`, 'wide');
+  const link = (token) => `${location.origin}/#/invite/${token}`;
+  const copy = async (text) => {
+    try { await navigator.clipboard.writeText(text); toast('Ссылка скопирована'); } catch { toast('Не удалось скопировать — выделите ссылку вручную', 'error'); }
+  };
+  const shortDate = (s) => toDate(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
   const load = async () => {
     try {
-      const users = await api('GET', '/api/admin/users');
-      $('#users-list', m).innerHTML = `<table class="users-table">
-        <thead><tr><th>Пользователь</th><th>Заметок</th><th>Задач</th><th></th></tr></thead>
-        <tbody>${users.map((u) => `<tr>
+      const [users, invites] = await Promise.all([api('GET', '/api/admin/users'), api('GET', '/api/admin/invites')]);
+      $('#users-list', m).innerHTML = `<table class="users-table"><tbody>${users.map((u) => `<tr>
           <td><b style="font-weight:500">${esc(u.name || '—')}</b> ${u.is_admin ? '<span class="role">админ</span>' : ''}<br><small class="muted">${esc(u.email)}</small></td>
-          <td class="num">${u.pages}</td><td class="num">${u.tasks}</td>
-          <td style="text-align:right;white-space:nowrap">
-            <button class="btn ghost" data-reset="${u.id}" data-email="${esc(u.email)}">Новый пароль</button>
-            ${u.id !== S.user.id ? `<button class="icon-btn" data-del="${u.id}" data-email="${esc(u.email)}" title="Удалить" aria-label="Удалить">${icon('trash')}</button>` : ''}
-          </td></tr>`).join('')}</tbody></table>`;
+          <td class="num">с ${esc(shortDate(u.created_at))}</td>
+          <td style="text-align:right;width:1%">${u.id !== S.user.id ? `<button class="icon-btn" data-del="${u.id}" data-email="${esc(u.email)}" title="Удалить" aria-label="Удалить">${icon('trash')}</button>` : ''}</td>
+        </tr>`).join('')}</tbody></table>`;
+      $('#inv-list', m).innerHTML = invites.length ? `<table class="users-table"><tbody>${invites.map((i) => `<tr>
+          <td><b style="font-weight:500">${esc(i.label || 'Приглашение')}</b><br><small class="${i.expired ? 'danger-text' : 'muted'}">${i.expired ? 'Срок истёк' : `Ждёт регистрации · действует до ${esc(shortDate(i.expires_at))}`}</small></td>
+          <td style="text-align:right;white-space:nowrap;width:1%">
+            ${i.expired ? '' : `<button class="btn ghost" data-copy="${esc(i.token)}">Скопировать ссылку</button>`}
+            <button class="icon-btn" data-inv-del="${i.id}" title="Отменить приглашение" aria-label="Отменить приглашение">${icon('trash')}</button>
+          </td></tr>`).join('')}</tbody></table>` : '';
     } catch (e) { fail(e); }
   };
   load();
-  $('#nu-gen', m).onclick = () => { $('#nu-pass', m).value = genPassword(); };
-  $('#user-form', m).onsubmit = async (e) => {
+  $('#inv-form', m).onsubmit = async (e) => {
     e.preventDefault();
-    $('#nu-err', m).textContent = '';
-    const body = { name: $('#nu-name', m).value, email: $('#nu-email', m).value, password: $('#nu-pass', m).value, is_admin: $('#nu-admin', m).checked };
     try {
-      await api('POST', '/api/admin/users', body);
-      toast(`Аккаунт создан. Передайте: ${body.email} / ${body.password}`);
-      ['#nu-name', '#nu-email', '#nu-pass'].forEach((s) => { $(s, m).value = ''; });
-      $('#nu-admin', m).checked = false;
+      const { token, days } = await api('POST', '/api/admin/invites', { label: $('#inv-label', m).value });
+      $('#inv-label', m).value = '';
+      $('#inv-new', m).innerHTML = `<div class="inv-new">
+        <div class="inv-link" id="inv-link">${esc(link(token))}</div>
+        <div class="inv-row"><span class="set-hint">Отправьте ссылку человеку. Она одноразовая и действует ${days} ${plural(days, 'день', 'дня', 'дней')}.</span>
+        <button type="button" class="btn" data-copy="${esc(token)}">Скопировать</button></div></div>`;
+      copy(link(token));
       load();
-    } catch (err) { $('#nu-err', m).textContent = err.message; }
+    } catch (err) { fail(err); }
   };
-  $('#users-list', m).addEventListener('click', async (e) => {
-    const reset = e.target.closest('[data-reset]');
+  m.addEventListener('click', async (e) => {
+    const cp = e.target.closest('[data-copy]');
     const del = e.target.closest('[data-del]');
-    if (reset) {
-      const pw = genPassword();
-      const ok = await confirmDialog({ title: 'Задать новый пароль?', text: `Новый пароль для ${reset.dataset.email}: ${pw}\nСкопируйте его перед подтверждением. Пользователь будет разлогинен на всех устройствах.`, okText: 'Задать пароль' });
-      if (!ok) return;
-      try {
-        await api('PATCH', `/api/admin/users/${reset.dataset.reset}`, { password: pw });
-        try { await navigator.clipboard.writeText(pw); toast('Пароль изменён и скопирован'); } catch { toast(`Пароль изменён: ${pw}`); }
-      } catch (err) { fail(err); }
+    const invDel = e.target.closest('[data-inv-del]');
+    if (cp) copy(link(cp.dataset.copy));
+    if (invDel) {
+      try { await api('DELETE', `/api/admin/invites/${invDel.dataset.invDel}`); $('#inv-new', m).innerHTML = ''; load(); } catch (err) { fail(err); }
     }
     if (del) {
       const ok = await confirmDialog({ title: 'Удалить пользователя?', text: `${del.dataset.email} и все его заметки и задачи будут удалены навсегда.`, okText: 'Удалить', danger: true });

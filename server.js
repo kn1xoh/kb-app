@@ -37,9 +37,14 @@ const SANITIZE = {
     a: sanitizeHtml.simpleTransform('a', { target: '_blank', rel: 'noopener noreferrer' }),
   },
 };
-const clean = (html) => sanitizeHtml(String(html || ''), SANITIZE);
-const plain = (html) => sanitizeHtml(String(html || '').replace(/<\/(p|div|h\d|li|pre|blockquote)>|<br\s*\/?>/gi, ' $&'),
-  { allowedTags: [], allowedAttributes: {} }).replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+// Зашифрованное браузером поле: «e1:» + base64. Сервер его не читает и не меняет
+const isEnc = (v) => typeof v === 'string' && v.startsWith('e1:');
+const clean = (html) => (isEnc(html) ? html : sanitizeHtml(String(html || ''), SANITIZE));
+const plain = (html) => (isEnc(html) ? '' : sanitizeHtml(String(html || '').replace(/<\/(p|div|h\d|li|pre|blockquote)>|<br\s*\/?>/gi, ' $&'),
+  { allowedTags: [], allowedAttributes: {} }).replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim());
+const cutTitle = (v) => (isEnc(v) ? v.slice(0, 4000) : String(v ?? '').slice(0, 300));
+// Поиск по зашифрованным данным делает браузер, на сервере для них search_text пустой
+const searchText = (title, body) => (isEnc(title) || isEnc(body) ? '' : lower(`${title} ${plain(body)}`));
 const lower = (s) => String(s || '').toLowerCase();
 
 function httpError(res, status, message) {
@@ -58,7 +63,7 @@ function createSession(res, req, userId) {
   });
 }
 
-const publicUser = (u) => u && ({ id: u.id, email: u.email, name: u.name, is_admin: !!u.is_admin });
+const publicUser = (u) => u && ({ id: u.id, email: u.email, name: u.name, is_admin: !!u.is_admin, encrypted: !!u.kdf_salt });
 
 // Custom header blocks cross-site form posts (browsers can't set it without CORS preflight)
 app.use('/api', (req, res, next) => {
@@ -82,6 +87,8 @@ const auth = (req, res, next) => (req.user ? next() : httpError(res, 401, 'Ну�
 const admin = (req, res, next) => (req.user?.is_admin ? next() : httpError(res, 403, 'Доступно только администратору'));
 
 // ---------- auth ----------
+// Пароль и код восстановления на сервер не попадают: браузер выводит из них «пароль для входа» (auth)
+// и отдельно ключ, которым шифрует данные. Сервер хранит bcrypt от auth и ключ данных в зашифрованном виде.
 
 const attempts = new Map();
 function tooManyAttempts(key) {
@@ -90,38 +97,107 @@ function tooManyAttempts(key) {
   attempts.set(key, list);
   return list.length >= 10;
 }
+const failAttempt = (key) => attempts.get(key).push(Date.now());
+
+const normEmail = (e) => String(e || '').trim().toLowerCase();
+const findUser = (email) => db.prepare('SELECT * FROM users WHERE email = ?').get(normEmail(email));
+
+// Секрет сервера — для «соли» несуществующих email (чтобы по ответу нельзя было узнать, есть ли аккаунт)
+const SERVER_SECRET = (() => {
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'secret'").get();
+  if (row) return row.value;
+  const v = crypto.randomBytes(32).toString('hex');
+  db.prepare("INSERT INTO meta (key, value) VALUES ('secret', ?)").run(v);
+  return v;
+})();
+const fakeSalt = (email, kind) => crypto.createHmac('sha256', SERVER_SECRET).update(`${kind}|${normEmail(email)}`)
+  .digest().subarray(0, 16).toString('base64');
+
+const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const HEX64 = /^[0-9a-f]{64}$/;
+// Проверка набора ключей из браузера: группа пароля и/или группа кода восстановления
+function readKeys(b, { password = true, recovery = true } = {}) {
+  const out = {};
+  if (password) {
+    if (!HEX64.test(b?.auth || '') || !B64.test(b?.kdf_salt || '') || !B64.test(b?.wrapped_key || '')) return null;
+    Object.assign(out, { auth: b.auth, kdf_salt: b.kdf_salt, wrapped_key: b.wrapped_key });
+  }
+  if (recovery) {
+    if (!HEX64.test(b?.rec_auth || '') || !B64.test(b?.rec_salt || '') || !B64.test(b?.rec_wrapped || '')) return null;
+    Object.assign(out, { rec_auth: b.rec_auth, rec_salt: b.rec_salt, rec_wrapped: b.rec_wrapped });
+  }
+  return out;
+}
+function saveKeys(userId, k) {
+  if (k.auth) {
+    db.prepare('UPDATE users SET password_hash = ?, kdf_salt = ?, wrapped_key = ? WHERE id = ?')
+      .run(bcrypt.hashSync(k.auth, 10), k.kdf_salt, k.wrapped_key, userId);
+  }
+  if (k.rec_auth) {
+    db.prepare('UPDATE users SET rec_hash = ?, rec_salt = ?, rec_wrapped = ? WHERE id = ?')
+      .run(bcrypt.hashSync(k.rec_auth, 10), k.rec_salt, k.rec_wrapped, userId);
+  }
+}
+const BAD_KEYS = 'Не удалось подготовить шифрование. Обновите страницу и попробуйте ещё раз';
+
+function validateUserInput(email, name) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail(email))) return 'Укажите корректный email';
+  if (!String(name || '').trim()) return 'Напишите, как вас зовут';
+  if (findUser(email)) return 'Аккаунт с таким email уже есть';
+  return null;
+}
+function createUser({ email, name, isAdmin }, keys) {
+  const info = db.prepare("INSERT INTO users (email, name, password_hash, is_admin) VALUES (?, ?, '', ?)")
+    .run(normEmail(email), String(name).trim().slice(0, 80), isAdmin ? 1 : 0);
+  saveKeys(info.lastInsertRowid, keys);
+  seedWelcome(info.lastInsertRowid);
+  return info.lastInsertRowid;
+}
 
 app.get('/api/me', (req, res) => {
   const needsSetup = db.prepare('SELECT COUNT(*) AS n FROM users').get().n === 0;
   res.json({ user: publicUser(req.user), needsSetup });
 });
 
+// Первый шаг входа: соли, из которых браузер выводит ключи. legacy — старый аккаунт без шифрования
+app.post('/api/prelogin', (req, res) => {
+  const email = req.body?.email;
+  const user = findUser(email);
+  if (user && !user.kdf_salt) return res.json({ legacy: true });
+  res.json({
+    salt: user ? user.kdf_salt : fakeSalt(email, 'p'),
+    rec_salt: user?.rec_salt || fakeSalt(email, 'r'),
+  });
+});
+
 app.post('/api/setup', (req, res) => {
   if (db.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0) {
     return httpError(res, 400, 'Администратор уже создан');
   }
-  const { email, name, password } = req.body || {};
-  const err = validateUserInput(email, password);
+  const b = req.body || {};
+  const err = validateUserInput(b.email, b.name);
   if (err) return httpError(res, 400, err);
-  const info = db.prepare('INSERT INTO users (email, name, password_hash, is_admin) VALUES (?, ?, ?, 1)')
-    .run(email.trim(), String(name || '').trim(), bcrypt.hashSync(password, 10));
-  seedWelcome(info.lastInsertRowid);
-  createSession(res, req, info.lastInsertRowid);
-  res.json({ user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid)) });
+  const keys = readKeys(b);
+  if (!keys) return httpError(res, 400, BAD_KEYS);
+  const id = createUser({ email: b.email, name: b.name, isAdmin: true }, keys);
+  createSession(res, req, id);
+  res.json({ user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(id)) });
 });
 
 app.post('/api/login', (req, res) => {
-  const { email, password } = req.body || {};
-  const key = `${req.ip}|${lower(email)}`;
+  const { email, auth, password } = req.body || {};
+  const key = `${req.ip}|${normEmail(email)}`;
   if (tooManyAttempts(key)) return httpError(res, 429, 'Слишком много попыток. Попробуйте через 15 минут');
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(String(email || '').trim());
-  if (!user || !bcrypt.compareSync(String(password || ''), user.password_hash)) {
-    attempts.get(key).push(Date.now());
+  const user = findUser(email);
+  // старый аккаунт (до шифрования) входит по паролю, после входа браузер сразу создаёт ключи
+  const secret = user && !user.kdf_salt ? password : auth;
+  if (!user || !user.password_hash || !bcrypt.compareSync(String(secret || ''), user.password_hash)) {
+    failAttempt(key);
     return httpError(res, 401, 'Неверный email или пароль');
   }
   attempts.delete(key);
   createSession(res, req, user.id);
-  res.json({ user: publicUser(user) });
+  res.json({ user: publicUser(user), wrapped_key: user.wrapped_key });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -131,65 +207,113 @@ app.post('/api/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/me/password', auth, (req, res) => {
-  const { current, next: newPassword } = req.body || {};
-  if (!bcrypt.compareSync(String(current || ''), req.user.password_hash)) {
-    return httpError(res, 400, 'Текущий пароль указан неверно');
+// Новые ключи из браузера: смена пароля (на устройстве, где уже вошли, старый пароль не нужен),
+// новый код восстановления или первое включение шифрования у старого аккаунта
+app.post('/api/me/keys', auth, (req, res) => {
+  const b = req.body || {};
+  const hasPassword = b.auth !== undefined;
+  const hasRecovery = b.rec_auth !== undefined;
+  if (!req.user.kdf_salt && !(hasPassword && hasRecovery)) return httpError(res, 400, BAD_KEYS);
+  const keys = readKeys(b, { password: hasPassword, recovery: hasRecovery });
+  if (!keys || (!hasPassword && !hasRecovery)) return httpError(res, 400, BAD_KEYS);
+  saveKeys(req.user.id, keys);
+  // после смены пароля другие устройства выходят из аккаунта
+  if (hasPassword && req.user.kdf_salt) {
+    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(req.user.id, req.cookies[COOKIE]);
   }
-  if (String(newPassword || '').length < 8) return httpError(res, 400, 'Новый пароль должен быть не короче 8 символов');
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(newPassword, 10), req.user.id);
-  db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(req.user.id, req.cookies[COOKIE]);
   res.json({ ok: true });
 });
 
-function validateUserInput(email, password, passwordOptional = false) {
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())) return 'Укажите корректный email';
-  if (!(passwordOptional && !password) && String(password || '').length < 8) return 'Пароль должен быть не короче 8 символов';
-  return null;
+// ---------- восстановление пароля по коду (без участия администратора) ----------
+
+function checkRecovery(req, res) {
+  const { email, rec_auth } = req.body || {};
+  const key = `rec|${req.ip}|${normEmail(email)}`;
+  if (tooManyAttempts(key)) { httpError(res, 429, 'Слишком много попыток. Попробуйте через 15 минут'); return null; }
+  const user = findUser(email);
+  if (!user || !user.rec_hash || !bcrypt.compareSync(String(rec_auth || ''), user.rec_hash)) {
+    failAttempt(key);
+    httpError(res, 401, 'Неверный email или код восстановления');
+    return null;
+  }
+  return user;
 }
 
-// ---------- admin: users ----------
+app.post('/api/recover/start', (req, res) => {
+  const user = checkRecovery(req, res);
+  if (user) res.json({ rec_wrapped: user.rec_wrapped });
+});
+
+app.post('/api/recover/finish', (req, res) => {
+  const user = checkRecovery(req, res);
+  if (!user) return;
+  const keys = readKeys(req.body?.next);
+  if (!keys) return httpError(res, 400, BAD_KEYS);
+  saveKeys(user.id, keys);
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+  createSession(res, req, user.id);
+  res.json({ user: publicUser(user) });
+});
+
+// ---------- приглашения ----------
+
+const INVITE_DAYS = 7;
+const liveInvite = (token) => db.prepare(`SELECT i.*, u.name AS inviter FROM invites i LEFT JOIN users u ON u.id = i.created_by
+  WHERE i.token = ? AND i.used_at IS NULL AND i.expires_at > datetime('now')`).get(String(token || ''));
+
+app.get('/api/invites/:token', (req, res) => {
+  const inv = liveInvite(req.params.token);
+  if (!inv) return httpError(res, 404, 'Приглашение не найдено: оно уже использовано или истёк срок. Попросите новое');
+  res.json({ inviter: inv.inviter || '' });
+});
+
+app.post('/api/register', (req, res) => {
+  const b = req.body || {};
+  const inv = liveInvite(b.token);
+  if (!inv) return httpError(res, 400, 'Приглашение не найдено: оно уже использовано или истёк срок. Попросите новое');
+  const err = validateUserInput(b.email, b.name);
+  if (err) return httpError(res, 400, err);
+  const keys = readKeys(b);
+  if (!keys) return httpError(res, 400, BAD_KEYS);
+  const id = db.transaction(() => {
+    const uid = createUser({ email: b.email, name: b.name, isAdmin: false }, keys);
+    db.prepare("UPDATE invites SET used_by = ?, used_at = datetime('now') WHERE id = ?").run(uid, inv.id);
+    return uid;
+  })();
+  createSession(res, req, id);
+  res.json({ user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(id)) });
+});
+
+// ---------- admin: пользователи и приглашения ----------
+// Администратор видит только список аккаунтов: ни паролей, ни заметок и задач других пользователей
 
 app.get('/api/admin/users', auth, admin, (req, res) => {
-  res.json(db.prepare(`SELECT u.id, u.email, u.name, u.is_admin, u.created_at,
-    (SELECT COUNT(*) FROM pages p WHERE p.user_id = u.id AND p.deleted_at IS NULL) AS pages,
-    (SELECT COUNT(*) FROM tasks t WHERE t.user_id = u.id AND t.deleted_at IS NULL) AS tasks
-    FROM users u ORDER BY u.created_at`).all().map((u) => ({ ...u, is_admin: !!u.is_admin })));
-});
-
-app.post('/api/admin/users', auth, admin, (req, res) => {
-  const { email, name, password, is_admin } = req.body || {};
-  const err = validateUserInput(email, password);
-  if (err) return httpError(res, 400, err);
-  if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email.trim())) {
-    return httpError(res, 400, 'Пользователь с таким email уже есть');
-  }
-  const info = db.prepare('INSERT INTO users (email, name, password_hash, is_admin) VALUES (?, ?, ?, ?)')
-    .run(email.trim(), String(name || '').trim(), bcrypt.hashSync(password, 10), is_admin ? 1 : 0);
-  seedWelcome(info.lastInsertRowid);
-  res.json({ id: info.lastInsertRowid });
-});
-
-app.patch('/api/admin/users/:id', auth, admin, (req, res) => {
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-  if (!user) return httpError(res, 404, 'Пользователь не найден');
-  const { name, password, is_admin } = req.body || {};
-  if (password !== undefined) {
-    if (String(password).length < 8) return httpError(res, 400, 'Пароль должен быть не короче 8 символов');
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(password, 10), user.id);
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
-  }
-  if (name !== undefined) db.prepare('UPDATE users SET name = ? WHERE id = ?').run(String(name).trim(), user.id);
-  if (is_admin !== undefined) {
-    if (user.id === req.user.id && !is_admin) return httpError(res, 400, 'Нельзя снять права администратора с самого себя');
-    db.prepare('UPDATE users SET is_admin = ? WHERE id = ?').run(is_admin ? 1 : 0, user.id);
-  }
-  res.json({ ok: true });
+  res.json(db.prepare('SELECT id, email, name, is_admin, created_at FROM users ORDER BY created_at').all()
+    .map((u) => ({ ...u, is_admin: !!u.is_admin })));
 });
 
 app.delete('/api/admin/users/:id', auth, admin, (req, res) => {
   if (Number(req.params.id) === req.user.id) return httpError(res, 400, 'Нельзя удалить свой аккаунт');
   db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/invites', auth, admin, (req, res) => {
+  db.prepare("DELETE FROM invites WHERE used_at IS NULL AND expires_at < datetime('now', '-30 days')").run();
+  res.json(db.prepare(`SELECT id, token, label, created_at, expires_at, expires_at <= datetime('now') AS expired
+    FROM invites WHERE used_at IS NULL ORDER BY created_at DESC`).all().map((i) => ({ ...i, expired: !!i.expired })));
+});
+
+app.post('/api/admin/invites', auth, admin, (req, res) => {
+  const token = crypto.randomBytes(18).toString('base64url');
+  const label = String(req.body?.label || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  db.prepare("INSERT INTO invites (token, label, created_by, expires_at) VALUES (?, ?, ?, datetime('now', ?))")
+    .run(token, label, req.user.id, `+${INVITE_DAYS} days`);
+  res.json({ token, days: INVITE_DAYS });
+});
+
+app.delete('/api/admin/invites/:id', auth, admin, (req, res) => {
+  db.prepare('DELETE FROM invites WHERE id = ? AND used_at IS NULL').run(req.params.id);
   res.json({ ok: true });
 });
 
@@ -216,19 +340,19 @@ app.get('/api/pages/:id', auth, (req, res) => {
 app.post('/api/pages', auth, (req, res) => {
   const parentId = req.body?.parent_id ?? null;
   if (parentId !== null && !getPage(req.user.id, parentId)) return httpError(res, 400, 'Заметка, в которую вы вкладываете, не найдена');
-  const title = String(req.body?.title || '').slice(0, 300);
+  const title = cutTitle(req.body?.title || '');
   const pos = db.prepare(`SELECT COALESCE(MAX(position), -1) + 1 AS p FROM pages
     WHERE user_id = ? AND parent_id IS ?`).get(req.user.id, parentId).p;
   const info = db.prepare('INSERT INTO pages (user_id, parent_id, title, position, search_text) VALUES (?, ?, ?, ?, ?)')
-    .run(req.user.id, parentId, title, pos, lower(title));
+    .run(req.user.id, parentId, title, pos, searchText(title, ''));
   res.json(getPage(req.user.id, info.lastInsertRowid));
 });
 
 function savePage(page, body) {
-  const title = body?.title !== undefined ? String(body.title).slice(0, 300) : page.title;
+  const title = body?.title !== undefined ? cutTitle(body.title) : page.title;
   const content = body?.content !== undefined ? clean(body.content) : page.content;
   db.prepare(`UPDATE pages SET title = ?, content = ?, search_text = ?, updated_at = datetime('now')
-    WHERE id = ?`).run(title, content, lower(`${title} ${plain(content)}`), page.id);
+    WHERE id = ?`).run(title, content, searchText(title, content), page.id);
   return getPage(page.user_id, page.id);
 }
 
@@ -254,8 +378,10 @@ function firstLine(html) {
 
 // Заметка без названия не остаётся: с текстом — получает название из первой строки,
 // совсем пустая и без подзаметок — удаляется насовсем (в корзину не попадает).
+// Если текст зашифрован, название из первой строки присылает браузер, а пустой текст он присылает как ''.
 function finalizePage(page) {
   if (page.title.trim()) return { title: page.title };
+  if (isEnc(page.content)) return { title: '' };
   const line = firstLine(page.content);
   if (line) return { title: savePage(page, { title: line }).title };
   const kids = db.prepare('SELECT COUNT(*) AS n FROM pages WHERE parent_id = ? AND deleted_at IS NULL').get(page.id).n;
@@ -459,10 +585,11 @@ const idList = (ids) => (Array.isArray(ids) ? [...new Set(ids.map(Number).filter
 // без текста — удаляется насовсем (в корзину не попадает)
 function setTaskTitle(t, title) {
   db.prepare("UPDATE tasks SET title = ?, search_text = ?, updated_at = datetime('now') WHERE id = ?")
-    .run(title, lower(`${title} ${plain(t.description)}`), t.id);
+    .run(title, searchText(title, t.description), t.id);
 }
 function finalizeTask(t) {
   if (t.title.trim()) return { title: t.title };
+  if (isEnc(t.description)) return { title: '' };
   const line = firstLine(t.description);
   if (!line) {
     db.prepare('DELETE FROM tasks WHERE id = ?').run(t.id);
@@ -482,12 +609,12 @@ app.get('/api/tasks', auth, (req, res) => {
 app.post('/api/tasks', auth, (req, res) => {
   const b = req.body || {};
   // Название можно ввести уже в открытой карточке, поэтому задача создаётся и без него
-  const title = String(b.title || '').trim().slice(0, 300);
+  const title = isEnc(b.title) ? cutTitle(b.title) : String(b.title || '').trim().slice(0, 300);
   const status = b.status && statusExists(req.user.id, b.status) ? b.status : defaultStatus(req.user.id);
   const priority = PRIORITIES.includes(b.priority) ? b.priority : 'medium';
   const due = validDate(b.due_date) && b.due_date ? b.due_date : null;
   const info = db.prepare(`INSERT INTO tasks (user_id, title, status, priority, due_date, position, search_text)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(req.user.id, title, status, priority, due, topPosition(req.user.id, status), lower(title));
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(req.user.id, title, status, priority, due, topPosition(req.user.id, status), searchText(title, ''));
   res.json(taskOut(getTask(req.user.id, info.lastInsertRowid)));
 });
 
@@ -496,7 +623,7 @@ app.patch('/api/tasks/:id', auth, (req, res) => {
   if (!t) return httpError(res, 404, 'Задача не найдена');
   const b = req.body || {};
   const next = { ...t };
-  if (b.title !== undefined) next.title = String(b.title).slice(0, 300);
+  if (b.title !== undefined) next.title = cutTitle(b.title);
   if (b.description !== undefined) next.description = clean(b.description);
   if (b.status !== undefined) {
     if (!statusExists(req.user.id, b.status)) return httpError(res, 400, 'Такого статуса нет. Обновите страницу');
@@ -514,7 +641,7 @@ app.patch('/api/tasks/:id', auth, (req, res) => {
   db.prepare(`UPDATE tasks SET title = ?, description = ?, status = ?, priority = ?, due_date = ?, position = ?,
     search_text = ?, updated_at = datetime('now') WHERE id = ?`)
     .run(next.title, next.description, next.status, next.priority, next.due_date, next.position,
-      lower(`${next.title} ${plain(next.description)}`), t.id);
+      searchText(next.title, next.description), t.id);
   res.json(taskOut(getTask(req.user.id, t.id)));
 });
 
@@ -523,11 +650,11 @@ app.post('/api/tasks/:id/finalize', auth, (req, res) => {
   const t = getTask(req.user.id, req.params.id);
   if (!t) return res.json({ deleted: true });
   const b = req.body || {};
-  if (b.title !== undefined) t.title = String(b.title).trim().slice(0, 300);
+  if (b.title !== undefined) t.title = isEnc(b.title) ? cutTitle(b.title) : String(b.title).trim().slice(0, 300);
   if (b.description !== undefined) t.description = clean(b.description);
   if (b.title !== undefined || b.description !== undefined) {
     db.prepare(`UPDATE tasks SET title = ?, description = ?, search_text = ?, updated_at = datetime('now') WHERE id = ?`)
-      .run(t.title, t.description, lower(`${t.title} ${plain(t.description)}`), t.id);
+      .run(t.title, t.description, searchText(t.title, t.description), t.id);
   }
   res.json(finalizeTask(t));
 });
@@ -537,6 +664,7 @@ app.post('/api/tasks/:id/finalize', auth, (req, res) => {
   const untitled = db.prepare("SELECT * FROM tasks WHERE trim(title) = ''").all();
   untitled.forEach((t) => {
     if (!t.deleted_at) return finalizeTask(t);
+    if (isEnc(t.description)) return;
     const line = firstLine(t.description);
     if (line) setTaskTitle(t, line); else db.prepare('DELETE FROM tasks WHERE id = ?').run(t.id);
   });
@@ -710,25 +838,45 @@ app.delete('/api/statuses/:key', auth, (req, res) => {
 });
 
 // ---------- search ----------
+// Данные зашифрованы, поэтому ищет браузер: сервер отдаёт все живые заметки и задачи (в зашифрованном виде)
 
-function snippet(text, q) {
-  const i = text.indexOf(q);
-  if (i < 0) return text.slice(0, 120);
-  const start = Math.max(0, i - 50);
-  return (start > 0 ? '…' : '') + text.slice(start, i + q.length + 70) + (i + q.length + 70 < text.length ? '…' : '');
-}
+app.get('/api/search-index', auth, (req, res) => {
+  res.json({
+    pages: db.prepare('SELECT id, title, content, updated_at FROM pages WHERE user_id = ? AND deleted_at IS NULL').all(req.user.id),
+    tasks: db.prepare(`SELECT id, title, status, completed_at, description, updated_at FROM tasks
+      WHERE user_id = ? AND deleted_at IS NULL`).all(req.user.id),
+  });
+});
 
-app.get('/api/search', auth, (req, res) => {
-  const q = lower(req.query.q).trim();
-  if (!q) return res.json({ pages: [], tasks: [] });
-  const like = `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
-  const pages = db.prepare(`SELECT id, title, content FROM pages WHERE user_id = ? AND deleted_at IS NULL AND search_text LIKE ? ESCAPE '\\'
-    ORDER BY updated_at DESC LIMIT 20`).all(req.user.id, like)
-    .map((p) => ({ id: p.id, title: p.title, snippet: snippet(plain(p.content), q) }));
-  const tasks = db.prepare(`SELECT id, title, status, completed_at, description FROM tasks WHERE user_id = ? AND deleted_at IS NULL
-    AND search_text LIKE ? ESCAPE '\\' ORDER BY completed_at IS NOT NULL, updated_at DESC LIMIT 20`).all(req.user.id, like)
-    .map((t) => ({ id: t.id, title: t.title, status: t.status, completed: !!t.completed_at, snippet: snippet(plain(t.description), q) }));
-  res.json({ pages, tasks });
+// ---------- шифрование данных, записанных открытым текстом ----------
+// Старые аккаунты и приветственные заметки нового аккаунта: браузер забирает открытый текст,
+// шифрует и возвращает. Работает и для корзины.
+
+const PLAIN = (col) => `(${col} != '' AND ${col} NOT LIKE 'e1:%')`;
+app.get('/api/me/plain', auth, (req, res) => {
+  res.json({
+    pages: db.prepare(`SELECT id, title, content FROM pages WHERE user_id = ? AND (${PLAIN('title')} OR ${PLAIN('content')})`).all(req.user.id),
+    tasks: db.prepare(`SELECT id, title, description FROM tasks WHERE user_id = ? AND (${PLAIN('title')} OR ${PLAIN('description')})`).all(req.user.id),
+  });
+});
+
+app.post('/api/me/encrypt', auth, (req, res) => {
+  const ok = (v) => v === '' || isEnc(v);
+  const pages = Array.isArray(req.body?.pages) ? req.body.pages : [];
+  const tasks = Array.isArray(req.body?.tasks) ? req.body.tasks : [];
+  if (![...pages.map((p) => [p.title, p.content]), ...tasks.map((t) => [t.title, t.description])].flat().every(ok)) {
+    return httpError(res, 400, BAD_KEYS);
+  }
+  const updPage = db.prepare("UPDATE pages SET title = ?, content = ?, search_text = '' WHERE id = ? AND user_id = ?");
+  const updTask = db.prepare("UPDATE tasks SET title = ?, description = ?, search_text = '' WHERE id = ? AND user_id = ?");
+  db.transaction(() => {
+    pages.forEach((p) => updPage.run(p.title, p.content, Number(p.id), req.user.id));
+    tasks.forEach((t) => updTask.run(t.title, t.description, Number(t.id), req.user.id));
+  })();
+  // старый открытый текст не должен остаться ни в свободных страницах файла базы, ни в журнале
+  db.exec('VACUUM');
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  res.json({ ok: true });
 });
 
 // ---------- welcome content for new accounts ----------

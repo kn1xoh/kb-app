@@ -103,6 +103,29 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .auth p { margin: 0; color: var(--muted); }
 .auth form { display: grid; gap: 14px; }
 .auth .btn { height: 42px; justify-content: center; }
+.field-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.link-btn { border: 0; background: none; padding: 0; font: 500 14px var(--font-ui); color: var(--accent); cursor: pointer; }
+.link-btn:hover { text-decoration: underline; }
+.auth .link-btn.center { justify-self: center; padding: 4px 8px; }
+.auth-note { font-size: 13.5px; padding: 10px 12px; border-radius: 8px; background: var(--hover); }
+.auth .auth-note { color: var(--muted); }
+
+/* код восстановления */
+.code-block { display: grid; gap: 10px; }
+.codebox {
+  font: 600 19px/1.4 var(--font-mono); letter-spacing: .06em; text-align: center; padding: 18px 12px;
+  border: 1px dashed var(--accent); border-radius: 10px; background: var(--accent-soft); color: var(--fg);
+  user-select: all; overflow-wrap: anywhere;
+}
+.code-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.code-actions .btn { justify-content: center; height: 42px; }
+.ack { display: flex; gap: 10px; align-items: center; font-size: 14px; cursor: pointer; }
+.ack input { width: 18px; height: 18px; margin: 0; flex: none; accent-color: var(--accent); }
+.auth .btn:disabled { opacity: .5; cursor: default; }
+.danger-text { color: var(--danger); }
+.auth .error-text { color: var(--danger); }
+.auth .error-text:empty { display: none; }
+@media (max-width: 400px) { .codebox { font-size: 16px; letter-spacing: .04em; } }
 
 /* ---------- shell ---------- */
 .shell { display: grid; grid-template-columns: 272px 1fr; height: 100%; }
@@ -763,6 +786,16 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
 .head-gear:hover { color: var(--fg); }
 .head-gear svg.i { width: 19px; height: 19px; }
 /* подпись блока в окне настроек — как подписи блоков в разделах */
+.set-block { display: grid; gap: 12px; }
+.set-block .field { max-width: 360px; }
+.set-hint { margin: 0; font-size: 13px; color: var(--muted); }
+.modal .inv-form { display: flex; gap: 8px; }
+.inv-form .input { flex: 1; min-width: 0; }
+.inv-new { display: grid; gap: 8px; padding: 12px; border-radius: 10px; background: var(--accent-soft); }
+.inv-link { font: 13px var(--font-mono); overflow-wrap: anywhere; user-select: all; }
+.inv-row { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+.inv-row .btn { flex: none; }
+#inv-list:empty, #inv-new:empty { display: none; }
 .set-caption { margin: 4px 0 -4px; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
 /* строка настройки с переключателем */
 .modal.settings { width: min(460px, calc(100% - 32px)); }
@@ -1001,4 +1034,10 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
 @media (max-width: 860px), (pointer: coarse) {
   .filters-row .filter-btn { height: var(--tap); }
   .filter-menu button { padding: 0 12px; min-height: var(--tap); }
+}
+
+/* приглашения на телефоне */
+@media (max-width: 600px) {
+  .modal .inv-form { flex-direction: column; }
+  .inv-row { flex-direction: column; align-items: stretch; }
 }
