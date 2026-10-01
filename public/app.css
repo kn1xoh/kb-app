@@ -538,7 +538,7 @@ ol.toc li + li { border-top: 1px solid var(--line); }
   position: relative; display: grid; grid-template-columns: 22px auto 1fr auto 28px; gap: 8px; align-items: center;
   padding: 8px 10px 8px 12px; color: var(--fg); text-decoration: none;
 }
-.outline-row:hover { background: var(--hover); }
+.outline-row:hover { background-color: var(--hover); }
 .outline-row:hover .toc-title { color: var(--accent); }
 .outline-row .twisty { width: 22px; height: 22px; border-radius: 4px; display: grid; place-items: center; color: var(--faint); border: 0; background: none; padding: 0; }
 .outline-row button.twisty:hover { background: var(--line); color: var(--fg); }
@@ -552,7 +552,7 @@ ol.toc li + li { border-top: 1px solid var(--line); }
 .outline-row .row-add { width: 26px; height: 26px; opacity: 0; }
 .outline-row:hover .row-add, .outline-row:focus-within .row-add { opacity: 1; }
 .outline-row.dragging { opacity: .4; }
-.outline-row.drop-inside { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.outline-row.drop-inside { background-color: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
 .outline-row.drop-before::before, .outline-row.drop-after::after {
   content: ""; position: absolute; left: 10px; right: 10px; height: 2px; border-radius: 2px; background: var(--accent);
 }
@@ -615,14 +615,14 @@ svg.i.filled { fill: currentColor; }
 #select-mode.on { color: var(--accent); background: var(--accent-soft); }
 .outline.selecting .outline-row { grid-template-columns: 20px 22px auto 1fr auto; cursor: default; user-select: none; }
 .outline.selecting .row-add { display: none; }
-.outline-row.selected { background: var(--accent-soft); }
+.outline-row.selected { background-color: var(--accent-soft); }
 .sel-box { width: 18px; height: 18px; border: 1.5px solid var(--faint); border-radius: 4px; background: var(--surface); cursor: pointer; }
 .sel-box.on {
   border-color: var(--danger);
   background: var(--danger) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/100% no-repeat;
 }
 .sel-box.implied { opacity: .45; cursor: not-allowed; }
-.outline-row.selected { background: var(--danger-soft); }
+.outline-row.selected { background-color: var(--danger-soft); }
 .bulk-bar {
   position: sticky; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 3;
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px;
@@ -682,3 +682,68 @@ svg.i.filled { fill: currentColor; }
 .st-color.on { color: #fff; box-shadow: 0 0 0 2px var(--fg); }
 .st-color svg.i { width: 14px; height: 14px; stroke-width: 3; }
 .st-actions { justify-content: space-between; }
+
+/* ---------- notes home v2: без дубля заголовка, карточки «Недавно изменённые», иконки заметок ---------- */
+/* На главных разделов верхняя полоса нужна только на телефоне — для кнопки меню */
+@media (min-width: 861px) { .topbar.bare { display: none; } .notes-home, .tasks-wrap { padding-top: 36px; } }
+.home-title { flex: 1; min-width: 0; }
+.home-sub { margin: 4px 0 0; font-size: 14px; color: var(--muted); }
+.notes-home { gap: 28px; }
+.notes-home section { gap: 10px; margin-top: 0; }
+.notes-home .toc-head { margin: 0; min-height: 30px; }
+.notes-home .toc-head h3 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+.notes-home .trash-toggle { text-transform: uppercase; letter-spacing: .08em; }
+.notes-home .trash-n { text-transform: none; letter-spacing: 0; }
+
+/* Иконки: обычная заметка — лист, заметка с подзаметками — стопка листов */
+svg.note-ic { color: var(--faint); }
+svg.note-ic.has-kids { color: var(--accent); }
+.outline-row svg.i.note-ic { width: 20px; height: 20px; stroke-width: 1.6; }
+.outline-row svg.i.note-ic.has-kids { color: var(--accent); }
+.outline-row .toc-title svg.i.mini-star { color: var(--warn); }
+.fav-row svg.note-ic.has-kids, .result svg.note-ic.has-kids { color: var(--accent); }
+
+/* Счётчик подзаметок рядом с названием */
+.kids-n {
+  display: inline-block; margin-left: 8px; padding: 0 7px; border-radius: 10px; vertical-align: 1px;
+  font: 500 11.5px/18px var(--font-ui); color: var(--muted); background: var(--hover); font-variant-numeric: tabular-nums;
+}
+.outline-row:hover .kids-n { background: var(--line); }
+.toc-title.untitled, .rc-title.untitled { color: var(--faint); font-style: italic; }
+.outline-row .mini-star { margin-left: 6px; }
+
+/* Дерево: тонкие направляющие вместо рамок между вложенными строками */
+.outline-row:not(.depth-0) {
+  padding-top: 7px; padding-bottom: 7px;
+  background-image: repeating-linear-gradient(to right, transparent 0 10.5px, var(--line) 10.5px 11.5px, transparent 11.5px 26px);
+  background-size: calc(var(--depth) * 26px) 100%; background-position: 12px 0; background-repeat: no-repeat;
+}
+ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent; }
+.outline.numbered .outline-row:not(.depth-0) { background-image: none; }
+
+/* «Недавно изменённые» — карточки */
+.recent-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.recent-card {
+  display: grid; gap: 6px; align-content: start; min-height: 104px; padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--fg); text-decoration: none;
+  transition: border-color .15s, background-color .15s;
+}
+.recent-card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: var(--hover); }
+.rc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rc-top svg.i { width: 20px; height: 20px; stroke-width: 1.6; }
+.rc-time { font-size: 12px; color: var(--faint); white-space: nowrap; }
+.rc-title {
+  font-weight: 600; font-size: 14.5px; line-height: 1.35; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.recent-card:hover .rc-title { color: var(--accent); }
+.rc-path { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 860px) {
+  .recent-cards { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(170px, 46%); overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 4px; margin: 0 -16px; padding-inline: 16px; scroll-padding-inline: 16px; }
+  .recent-card { scroll-snap-align: start; min-height: 96px; }
+  .notes-home { gap: 22px; }
+}
+.outline-row .toc-title { display: flex; align-items: center; min-width: 0; }
+.outline-row .toc-title .tt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.outline-row .toc-title > svg.i, .outline-row .kids-n { flex: none; }
+.outline.selecting .outline-row:not(.depth-0) { background-position: 40px 0; }

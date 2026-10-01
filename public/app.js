@@ -24,6 +24,9 @@ const ICONS = {
   book: 'M4 5a2 2 0 0 1 2-2h13v15H6a2 2 0 0 0-2 2zM4 20a2 2 0 0 0 2 1h13v-3M8 7h7',
   tasks: 'M9 11l3 3 8-8M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',
   file: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5',
+  // заметка — лист с текстом; заметка с подзаметками — стопка листов
+  note: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4',
+  notes: 'M4 10a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM7.5 13h5M7.5 17h3M8 5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2',
   search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4',
   plus: 'M12 5v14M5 12h14',
   more: 'M4.5 12a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0M10.5 12a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0M16.5 12a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0',
@@ -79,7 +82,10 @@ function ago(s) {
   if (diff < 60) return 'только что';
   if (diff < 3600) return `${Math.floor(diff / 60)} мин назад`;
   if (diff < 86400) return `${Math.floor(diff / 3600)} ч назад`;
-  return toDate(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const d = toDate(s);
+  const opts = { day: 'numeric', month: 'long' };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+  return d.toLocaleDateString('ru-RU', opts);
 }
 function dueLabel(d) {
   const t = todayStr();
@@ -264,7 +270,7 @@ function renderShell() {
 }
 
 function closeNav() { $('#shell')?.classList.remove('nav-open'); }
-const topbar = (inner) => `<div class="topbar"><button class="icon-btn menu-toggle" data-act="nav" aria-label="Меню">${icon('menu')}</button>${inner}</div>`;
+const topbar = (inner, cls = '') => `<div class="topbar ${cls}"><button class="icon-btn menu-toggle" data-act="nav" aria-label="Меню">${icon('menu')}</button>${inner}</div>`;
 
 function updateCounts() {
   const open = S.tasks.filter((t) => t.status !== 'done').length;
@@ -328,7 +334,8 @@ function pageNumbers() {
   walk(null, '');
   return map;
 }
-const numOrIcon = (nums, id, cls) => (S.numbering ? `<span class="${cls}">${nums.get(id)}</span>` : icon('file', cls === 'tree-num' ? 'doc' : ''));
+const noteIcon = (id, cls = '') => (childrenOf(id).length ? icon('notes', `note-ic has-kids ${cls}`) : icon('note', `note-ic ${cls}`));
+const numOrIcon = (nums, id, cls) => (S.numbering ? `<span class="${cls}">${nums.get(id)}</span>` : noteIcon(id, cls === 'tree-num' ? 'doc' : ''));
 
 // Sidebar "Избранное": favourite notes in the Notes section, favourite tasks in the Tasks section
 function renderTree() {
@@ -582,41 +589,56 @@ function renderNotesHome() {
   setActiveNav('notes');
   renderTree();
   const nums = pageNumbers();
-  const recent = [...S.pages].sort((a, b) => toDate(b.updated_at) - toDate(a.updated_at)).slice(0, 5);
+  const recent = [...S.pages].sort((a, b) => toDate(b.updated_at) - toDate(a.updated_at)).slice(0, 4);
   const rows = [];
   const anyOpen = S.pages.some((p) => homeExpanded.has(p.id) && childrenOf(p.id).length);
   const sel = S.selectMode ? selectionInfo() : null;
   const walk = (pid, depth) => childrenOf(pid).forEach((p) => {
     const kids = childrenOf(p.id).length;
     const closed = !homeExpanded.has(p.id);
+    const inside = kids ? descendants(p.id).length : 0;
     const state = !sel ? '' : S.selected.has(p.id) ? 'on' : sel.all.has(p.id) ? 'on implied' : '';
-    rows.push(`<li><a class="outline-row depth-${Math.min(depth, 3)} ${state ? 'selected' : ''}" href="#/notes/${p.id}" ${S.selectMode ? '' : 'draggable="true"'} data-id="${p.id}" style="padding-left:${12 + depth * 26}px">
+    rows.push(`<li><a class="outline-row depth-${Math.min(depth, 3)} ${state ? 'selected' : ''}" href="#/notes/${p.id}" ${S.selectMode ? '' : 'draggable="true"'} data-id="${p.id}" style="padding-left:${12 + depth * 26}px;--depth:${depth}">
       ${S.selectMode ? `<span class="sel-box ${state}" role="checkbox" aria-checked="${!!state}" aria-label="Выбрать"></span>` : ''}
       ${kids ? `<button class="twisty ${closed ? '' : 'open'}" data-home="toggle" aria-label="${closed ? 'Развернуть' : 'Свернуть'}">${icon('chevron')}</button>` : '<span class="twisty"></span>'}
       ${numOrIcon(nums, p.id, 'toc-num')}
-      <span class="toc-title">${esc(titleOf(p))}${p.favorite_at ? icon('star', 'filled mini-star') : ''}</span>
-      <span class="toc-meta">${kids && closed ? `${descendants(p.id).length} внутри · ` : ''}${ago(p.updated_at)}</span>
+      <span class="toc-title ${p.title.trim() ? '' : 'untitled'}"><span class="tt">${esc(titleOf(p))}</span>${p.favorite_at ? icon('star', 'filled mini-star') : ''}${inside ? `<span class="kids-n" title="${inside} ${plural(inside, 'подзаметка', 'подзаметки', 'подзаметок')} внутри">${inside}</span>` : ''}</span>
+      <span class="toc-meta">${ago(p.updated_at)}</span>
       <button class="icon-btn row-add" data-home="add" title="Добавить подзаметку" aria-label="Добавить подзаметку">${icon('plus')}</button>
     </a></li>`);
     if (kids && !closed) walk(p.id, depth + 1);
   });
   walk(null, 0);
+  const path = (p) => ancestors(p.id).map(titleOf).join(' / ');
+  const total = S.pages.length;
   $('#main').innerHTML = `
-    ${topbar('<div class="crumbs"><span>Заметки</span></div>')}
+    ${topbar('', 'bare')}
     <div class="notes-home">
-      <div class="tasks-head">
-        <h1>Заметки</h1>
+      <div class="tasks-head home-head">
+        <div class="home-title">
+          <h1>Заметки</h1>
+          ${total ? `<p class="home-sub">${total} ${plural(total, 'заметка', 'заметки', 'заметок')}</p>` : ''}
+        </div>
         <button class="btn primary" id="home-new">${icon('plus')}Новая заметка</button>
       </div>
-      ${S.pages.length ? `
+      ${total ? `
+      <section class="recent">
+        <div class="toc-head"><h3>Недавно изменённые</h3></div>
+        <div class="recent-cards">${recent.map((p) => `<a class="recent-card" href="#/notes/${p.id}">
+          <span class="rc-top">${noteIcon(p.id)}<span class="rc-time">${ago(p.updated_at)}</span></span>
+          <span class="rc-title ${p.title.trim() ? '' : 'untitled'}">${esc(titleOf(p))}</span>
+          <span class="rc-path">${path(p) ? esc(path(p)) : 'Верхний уровень'}</span>
+        </a>`).join('')}</div>
+      </section>
+      <section class="all-notes">
       <div class="toc-head">
-        <h3>Все заметки · ${S.pages.length}</h3>
+        <h3>Все заметки</h3>
         <span class="outline-tools">
           <button class="btn ghost" id="toggle-all">${anyOpen ? 'Свернуть всё' : 'Развернуть всё'}</button>
           <button class="btn ghost ${S.selectMode ? 'on' : ''}" id="select-mode">${S.selectMode ? 'Готово' : 'Выбрать'}</button>
         </span>
       </div>
-      <ol class="toc outline ${S.selectMode ? 'selecting' : ''}" id="outline">${rows.join('')}</ol>
+      <ol class="toc outline ${S.selectMode ? 'selecting' : ''} ${S.numbering ? 'numbered' : ''}" id="outline">${rows.join('')}</ol>
       ${S.selectMode ? `
       <div class="bulk-bar" role="region" aria-label="Выбранные заметки">
         <span class="bulk-count">${sel.total
@@ -625,10 +647,6 @@ function renderNotesHome() {
         <button class="btn ghost" id="sel-all">${sel.total === S.pages.length ? 'Снять выделение' : 'Выбрать все'}</button>
         <button class="btn danger solid" id="sel-delete" ${sel.total ? '' : 'disabled'}>${icon('trash')}Удалить</button>
       </div>` : ''}
-      <section>
-        <div class="toc-head"><h3>Недавно изменённые</h3></div>
-        <ol class="toc">${recent.map((p) => `<li><a class="toc-row recent-row" href="#/notes/${p.id}">
-          ${numOrIcon(nums, p.id, 'toc-num')}<span class="toc-title">${esc(titleOf(p))}</span><span class="toc-meta">${ago(p.updated_at)}</span></a></li>`).join('')}</ol>
       </section>` : `
       <div class="empty">
         <h2>Здесь будут ваши заметки</h2>
@@ -743,7 +761,7 @@ function trashSection() {
       ? `была в «${esc(it.parent_title.trim() || 'Без названия')}»` : '';
     const sub = it.sub_count ? `+ ${it.sub_count} ${plural(it.sub_count, 'подзаметка', 'подзаметки', 'подзаметок')}` : '';
     return `<li class="trash-row" data-id="${it.id}">
-      ${icon('file')}
+      ${icon(it.sub_count ? 'notes' : 'note')}
       <span class="trash-main">
         <span class="toc-title">${esc(it.title.trim() || 'Без названия')}</span>
         ${sub || where ? `<span class="trash-sub">${[sub, where].filter(Boolean).join(' · ')}</span>` : ''}
@@ -1218,7 +1236,7 @@ function renderTasks() {
   setActiveNav('tasks');
   renderTree();
   $('#main').innerHTML = `
-    ${topbar('<div class="crumbs"><span>Задачи</span></div>')}
+    ${topbar('', 'bare')}
     <div class="tasks-wrap">
       <div class="tasks-head">
         <h1>Задачи</h1>
@@ -1533,7 +1551,7 @@ function openSearch() {
     if (data.pages.length) {
       html += '<h4>Заметки</h4>' + data.pages.map((p) => {
         items.push(`#/notes/${p.id}`);
-        return `<div class="result" data-i="${items.length - 1}">${icon('file')}<b>${hl(p.title || 'Без названия', q)}</b><small>${hl(p.snippet || '', q)}</small></div>`;
+        return `<div class="result" data-i="${items.length - 1}">${noteIcon(p.id)}<b>${hl(p.title || 'Без названия', q)}</b><small>${hl(p.snippet || '', q)}</small></div>`;
       }).join('');
     }
     if (data.tasks.length) {
