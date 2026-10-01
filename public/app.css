@@ -91,14 +91,14 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 /* ---------- auth ---------- */
 .auth { min-height: 100%; display: grid; place-items: center; padding: 32px 16px; }
 .auth-card { width: 100%; max-width: 380px; display: grid; gap: 24px; }
-.auth-brand { display: flex; align-items: center; gap: 12px; }
-.logo { width: 34px; height: 34px; border-radius: 9px; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; flex: none; }
-.logo svg.i { width: 18px; height: 18px; }
-.logo-mark { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-linecap: round; }
-.brand-name { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
-.auth-brand .logo { width: 44px; height: 44px; border-radius: 12px; }
-.auth-brand .logo-mark { width: 30px; height: 30px; }
-.auth-brand .brand-name { font-size: 22px; }
+.auth-brand { display: flex; align-items: center; gap: 9px; }
+/* Логотип без плашки: зелёный знак рядом с названием */
+.logo { display: grid; place-items: center; flex: none; color: var(--accent); }
+.logo-mark { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-linecap: round; }
+.logo-mark * { stroke-width: 2.3; }
+.brand-name { font-size: 20px; font-weight: 700; letter-spacing: -.025em; }
+.auth-brand .logo-mark { width: 36px; height: 36px; }
+.auth-brand .brand-name { font-size: 28px; }
 .auth h1 { font: 600 28px/1.2 var(--font-read); margin: 0; text-wrap: balance; }
 .auth p { margin: 0; color: var(--muted); }
 .auth form { display: grid; gap: 14px; }
@@ -134,8 +134,8 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
   display: flex; flex-direction: column; min-height: 0;
   padding-top: env(safe-area-inset-top, 0px);
 }
-.side-head { display: flex; align-items: center; gap: 10px; padding: 14px 14px 10px; }
-.side-head .name { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-head { display: flex; align-items: center; gap: 7px; padding: 14px 14px 10px; }
+.side-head .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-trigger {
   margin: 0 10px 8px; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px;
   border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--muted); text-align: left;
