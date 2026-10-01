@@ -52,6 +52,12 @@ const ICONS = {
   palette: 'M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.8 1.7-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H16a5 5 0 0 0 5-5c0-4-4-7.2-9-7.2zM7.5 11.5h.01M10 7.5h.01M14.5 7.5h.01M17 11h.01',
   arrowUp: 'M12 19V5M6 11l6-6 6 6',
   arrowDown: 'M12 5v14M6 13l6 6 6-6',
+  bold: 'M7 5h5.5a3.5 3.5 0 0 1 0 7H7zM7 12h6.5a3.5 3.5 0 0 1 0 7H7z',
+  italic: 'M10 5h8M6 19h8M14.5 5l-5 14',
+  underline: 'M7 4v7a5 5 0 0 0 10 0V4M5 20h14',
+  strike: 'M4 12h16M16.5 7c-.6-1.6-2.2-2.5-4.4-2.5-2.6 0-4.6 1.3-4.6 3.3 0 1.4.9 2.4 2.6 3M8 16.3c.6 2 2.3 3.2 4.6 3.2 2.7 0 4.6-1.3 4.6-3.4 0-.8-.2-1.4-.7-1.9',
+  text: 'M5 7V5h14v2M12 5v14M9 19h6',
+  chevronDown: 'M7 10l5 5 5-5',
   star: 'M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.75 1-5.8L3.5 9.7l5.9-.9z',
 };
 const icon = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name]}"/></svg>`;
@@ -956,25 +962,26 @@ function makeEditor(editor, onChange) {
   bar.className = 'toolbar';
   bar.setAttribute('role', 'toolbar');
   bar.innerHTML = `
-    <select data-block aria-label="Тип текста">
-      <option value="p">Текст</option><option value="h1">Заголовок 1</option>
-      <option value="h2">Заголовок 2</option><option value="h3">Заголовок 3</option>
-    </select>
+    <button type="button" class="tb-block" data-block-btn title="Тип текста" aria-haspopup="menu">
+      <span data-block-label>Текст</span>${icon('chevronDown')}
+    </button>
     <span class="sep"></span>
-    <button class="icon-btn" data-cmd="bold" title="Жирный (Ctrl+B)"><span class="tb-text">Ж</span></button>
-    <button class="icon-btn" data-cmd="italic" title="Курсив (Ctrl+I)"><span class="tb-text" style="font-style:italic;font-family:var(--font-read)">К</span></button>
-    <button class="icon-btn" data-cmd="underline" title="Подчёркнутый (Ctrl+U)"><span class="tb-text" style="text-decoration:underline">П</span></button>
-    <button class="icon-btn" data-cmd="strikeThrough" title="Зачёркнутый"><span class="tb-text" style="text-decoration:line-through">З</span></button>
+    <button class="icon-btn" data-cmd="bold" title="Жирный (Ctrl+B)" aria-label="Жирный">${icon('bold', 'b')}</button>
+    <button class="icon-btn" data-cmd="italic" title="Курсив (Ctrl+I)" aria-label="Курсив">${icon('italic')}</button>
+    <button class="icon-btn" data-cmd="underline" title="Подчёркнутый (Ctrl+U)" aria-label="Подчёркнутый">${icon('underline')}</button>
+    <button class="icon-btn" data-cmd="strikeThrough" title="Зачёркнутый" aria-label="Зачёркнутый">${icon('strike')}</button>
     <span class="sep"></span>
-    <button class="icon-btn" data-cmd="insertUnorderedList" title="Маркированный список">${icon('list')}</button>
-    <button class="icon-btn" data-cmd="insertOrderedList" title="Нумерованный список">${icon('ol')}</button>
-    <button class="icon-btn" data-cmd="checklist" title="Чек-лист">${icon('checklist')}</button>
+    <button class="icon-btn" data-cmd="insertUnorderedList" title="Маркированный список" aria-label="Маркированный список">${icon('list')}</button>
+    <button class="icon-btn" data-cmd="insertOrderedList" title="Нумерованный список" aria-label="Нумерованный список">${icon('ol')}</button>
+    <button class="icon-btn" data-cmd="checklist" title="Чек-лист" aria-label="Чек-лист">${icon('checklist')}</button>
     <span class="sep"></span>
-    <button class="icon-btn" data-cmd="quote" title="Цитата">${icon('quote')}</button>
-    <button class="icon-btn" data-cmd="code" title="Блок кода">${icon('code')}</button>
-    <button class="icon-btn" data-cmd="link" title="Ссылка">${icon('link')}</button>
-    <button class="icon-btn" data-cmd="insertHorizontalRule" title="Разделитель">${icon('hr')}</button>
-    <button class="icon-btn" data-cmd="clear" title="Очистить форматирование">${icon('clear')}</button>`;
+    <button class="icon-btn" data-cmd="quote" title="Цитата" aria-label="Цитата">${icon('quote')}</button>
+    <button class="icon-btn" data-cmd="code" title="Блок кода" aria-label="Блок кода">${icon('code')}</button>
+    <button class="icon-btn" data-cmd="link" title="Ссылка (Ctrl+K)" aria-label="Ссылка">${icon('link')}</button>
+    <button class="icon-btn" data-cmd="insertHorizontalRule" title="Разделитель" aria-label="Разделитель">${icon('hr')}</button>
+    <button class="icon-btn" data-cmd="clear" title="Очистить форматирование" aria-label="Очистить форматирование">${icon('clear')}</button>`;
+  const BLOCKS = { p: 'Текст', h1: 'Заголовок 1', h2: 'Заголовок 2', h3: 'Заголовок 3' };
+  let curBlock = 'p';
 
   const changed = () => { markEmpty(); onChange(); };
   const blockOf = () => {
@@ -999,17 +1006,27 @@ function makeEditor(editor, onChange) {
     $('[data-cmd="checklist"]', bar).classList.toggle('on', inChecklist);
     $('[data-cmd="quote"]', bar).classList.toggle('on', !!blk?.closest('blockquote'));
     $('[data-cmd="code"]', bar).classList.toggle('on', !!blk?.closest('pre'));
-    const tag = blk?.closest('h1,h2,h3')?.tagName.toLowerCase() || 'p';
-    $('[data-block]', bar).value = tag;
+    curBlock = blk?.closest('h1,h2,h3')?.tagName.toLowerCase() || 'p';
+    $('[data-block-label]', bar).textContent = BLOCKS[curBlock];
   };
   document.addEventListener('selectionchange', refresh);
 
   bar.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
-  $('[data-block]', bar).addEventListener('change', (e) => {
-    editor.focus();
-    document.execCommand('formatBlock', false, `<${e.target.value}>`);
-    changed();
-    refresh();
+  const blockBtn = $('[data-block-btn]', bar);
+  blockBtn.addEventListener('click', () => {
+    if (!editor.contains(getSelection().anchorNode)) placeCaretEnd(editor);
+    const sel = getSelection();
+    const range = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+    const menu = showMenu(blockBtn, Object.entries(BLOCKS).map(([k, v]) =>
+      `<button data-m="${k}" class="bm bm-${k} ${k === curBlock ? 'on' : ''}"><span>${v}</span>${k === curBlock ? icon('check') : ''}</button>`).join(''), (k) => {
+      editor.focus();
+      if (range) { sel.removeAllRanges(); sel.addRange(range); }
+      document.execCommand('formatBlock', false, `<${k}>`);
+      changed();
+      refresh();
+    });
+    menu.classList.add('block-menu');
+    $('.on', menu)?.focus();
   });
 
   bar.addEventListener('click', (e) => {
@@ -1426,7 +1443,7 @@ function openTaskPanel(id) {
         <span>Создана</span>
         <span class="prop-text" title="${esc(ago(t.created_at))}">${esc(fullDateTime(t.created_at))}</span>
       </div>
-      <div>
+      <div class="editor-box">
         <div id="tp-toolbar"></div>
         <div class="editor" id="tp-desc" contenteditable="true" data-placeholder="Описание, заметки, чек-лист…">${t.description}</div>
       </div>

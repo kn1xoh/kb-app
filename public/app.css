@@ -192,15 +192,34 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .page-title::placeholder { color: var(--faint); }
 .page-meta { font-size: 13px; color: var(--faint); margin-bottom: 20px; }
 .toolbar {
-  position: sticky; top: 52px; z-index: 4; display: flex; flex-wrap: wrap; gap: 2px; padding: 4px;
+  position: sticky; top: 52px; z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 1px; padding: 4px;
   margin: 0 -4px 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
 }
-.toolbar .icon-btn { width: 32px; height: 32px; color: var(--fg); }
+.toolbar .icon-btn { width: 28px; height: 28px; color: var(--muted); }
+.toolbar .icon-btn:hover { color: var(--fg); }
+.toolbar .icon-btn svg.i { width: 17px; height: 17px; }
+.toolbar [data-cmd="clear"] { margin-left: auto; }
+.toolbar .icon-btn svg.i.b { stroke-width: 2.3; }
 .toolbar .icon-btn.on { background: var(--accent-soft); color: var(--accent); }
-.toolbar .sep { width: 1px; background: var(--line); margin: 5px 4px; }
-.toolbar select { height: 32px; border: 0; background: transparent; border-radius: 6px; padding: 0 6px; font-size: 14px; }
-.toolbar select:hover { background: var(--hover); }
-.toolbar .tb-text { font: 600 14px var(--font-ui); }
+.toolbar .sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+.tb-block {
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 4px; height: 28px; min-width: 108px;
+  padding: 0 6px 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--fg); font-size: 14px; font-weight: 500;
+}
+.tb-block:hover { background: var(--hover); }
+.tb-block svg.i { width: 15px; height: 15px; color: var(--muted); }
+.block-menu { min-width: 200px; }
+.block-menu .bm { justify-content: space-between; }
+.block-menu .bm.on { color: var(--accent); }
+.block-menu .bm svg.i { width: 16px; height: 16px; }
+.block-menu .bm-h1 span { font-size: 19px; font-weight: 600; }
+.block-menu .bm-h2 span { font-size: 16.5px; font-weight: 600; }
+.block-menu .bm-h3 span { font-size: 15px; font-weight: 600; }
+
+/* описание задачи: панель инструментов и текст — одна рамка */
+.editor-box { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); transition: border-color .15s, box-shadow .15s; }
+.editor-box:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); box-shadow: 0 0 0 3px var(--accent-soft); }
+.editor-box .toolbar { position: static; margin: 0; padding: 4px 6px; border: 0; border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; background: color-mix(in srgb, var(--sidebar) 45%, var(--surface)); }
 
 .editor { outline: none; font: 17px/1.7 var(--font-read); min-height: 40vh; overflow-wrap: anywhere; }
 .editor > *:first-child { margin-top: 0; }
@@ -323,8 +342,14 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .props { display: grid; grid-template-columns: 110px 1fr; gap: 10px 12px; align-items: center; font-size: 14px; }
 .props > span { color: var(--muted); }
 .props select, .props input { height: 34px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); padding: 0 10px; max-width: 240px; width: 100%; }
-.panel .toolbar { position: static; margin: 0 0 8px; }
-.prop-text { color: var(--fg); padding: 0 2px; font-variant-numeric: tabular-nums; }
+.props select {
+  appearance: none; -webkit-appearance: none; padding-right: 32px; color: var(--fg); cursor: pointer;
+  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7 10l5 5 5-5' fill='none' stroke='%23939c97' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") right 9px center / 16px no-repeat;
+}
+.props select:hover { background-color: var(--hover); }
+.props select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.props select option { background: var(--surface); color: var(--fg); }
+.prop-text { color: var(--fg); padding: 0 11px; font-variant-numeric: tabular-nums; }
 .date-btn {
   display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; max-width: 240px; width: 100%;
   border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--fg); text-align: left;
@@ -358,7 +383,13 @@ svg.i.flip { transform: scaleX(-1); }
 .datepicker .dp-clear { justify-content: flex-start; gap: 8px; padding: 8px 10px; color: var(--muted); border-top: 1px solid var(--line); border-radius: 0 0 6px 6px; }
 .datepicker .dp-clear svg.i { width: 16px; height: 16px; }
 
-.panel .editor { font-size: 15px; min-height: 180px; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.panel .editor { font: 15px/1.65 var(--font-ui); min-height: 200px; padding: 14px 16px; cursor: text; }
+.panel .editor p { margin: 0 0 .55em; }
+.panel .editor h1, .panel .editor h2, .panel .editor h3 { font-family: var(--font-ui); letter-spacing: -.005em; margin: 1.1em 0 .4em; }
+.panel .editor h1 { font-size: 1.45em; }
+.panel .editor h2 { font-size: 1.25em; }
+.panel .editor h3 { font-size: 1.08em; }
+.panel .editor ul.checklist li::before { top: .3em; }
 
 /* ---------- modal / search ---------- */
 .modal {
@@ -452,7 +483,7 @@ svg.i.flip { transform: scaleX(-1); }
 a.tree-title { color: var(--fg); text-decoration: none; }
 .editor { position: relative; }
 .editor.is-empty::before { content: attr(data-placeholder); position: absolute; top: 0; left: 0; color: var(--faint); pointer-events: none; }
-.panel .editor.is-empty::before { top: 12px; left: 14px; }
+.panel .editor.is-empty::before { top: 14px; left: 16px; }
 body:has(.shell) { overflow: hidden; }
 
 /* ---------- outline numbering & table of contents ---------- */
