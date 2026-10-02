@@ -547,7 +547,8 @@ async function startApp() {
   await encryptLeftovers();
   [S.pages, S.tasks, S.statuses] = await Promise.all([api('GET', '/api/pages'), api('GET', '/api/tasks'), api('GET', '/api/statuses')]);
   renderShell();
-  if (!location.hash) location.hash = '#/notes';
+  // без адреса (открыли заново, иконка «На экран Домой») — в раздел, который был открыт последним
+  if (!location.hash) location.hash = `#/${lastSection()}`;
   else route();
   fixUntitled();
   Push.register();
@@ -664,9 +665,15 @@ document.addEventListener('click', (e) => {
    Routing
    ========================================================= */
 window.addEventListener('hashchange', route);
+const LAST_SECTION_KEY = 'kb-last-section';
+const lastSection = () => {
+  const id = store.get(LAST_SECTION_KEY, 'notes');
+  return SECTIONS.some((s) => s.id === id) ? id : 'notes';
+};
 async function route() {
   if (!S.user) return;
   const [, section, id] = location.hash.split('/');
+  if (SECTIONS.some((s) => s.id === section)) store.set(LAST_SECTION_KEY, section);
   await flushPageSave();
   if (S.page && !(section === 'notes' && Number(id) === S.page.id)) await finalizePage(S.page.id);
   closeOverlays(true);
