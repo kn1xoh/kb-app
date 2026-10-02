@@ -3353,4 +3353,28 @@ async function openUsersDialog() {
   });
 }
 
+// iPhone: после закрытия клавиатуры Safari иногда оставляет страницу сдвинутой или «высокой»,
+// и всё, что прижато к низу экрана (кнопка «+», тосты, панель «Выбрать»), уезжает вниз.
+// Пока клавиатуры нет, подгоняем раскладку под реально видимую область.
+(function fixViewportAfterKeyboard() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const root = document.documentElement;
+  const typing = () => document.activeElement?.matches?.('input, textarea, select, [contenteditable="true"]');
+  let raf = 0;
+  const sync = () => {
+    raf = 0;
+    if (typing()) { root.style.removeProperty('--vv-gap'); return; }
+    if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
+    const gap = Math.round(window.innerHeight - vv.height - vv.offsetTop);
+    if (gap > 1) root.style.setProperty('--vv-gap', gap + 'px');
+    else root.style.removeProperty('--vv-gap');
+  };
+  const later = () => { if (!raf) raf = requestAnimationFrame(sync); };
+  vv.addEventListener('resize', later);
+  vv.addEventListener('scroll', later);
+  // клавиатура уезжает с анимацией — проверяем ещё раз, когда она закончится
+  document.addEventListener('focusout', () => { later(); setTimeout(later, 350); setTimeout(later, 800); });
+})();
+
 boot();
