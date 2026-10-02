@@ -1139,7 +1139,7 @@ body:has(.bulk-bar) #toasts { bottom: calc(84px + env(safe-area-inset-bottom, 0p
 /* ---------- кнопка «Готово»: закрыть заметку / карточку задачи ---------- */
 .done-btn {
   flex-shrink: 0; height: 32px; padding: 0 10px; margin-left: 2px; border: 0; border-radius: 8px;
-  background: none; color: var(--accent); font: 600 14.5px/1 inherit; font-family: inherit; cursor: pointer; white-space: nowrap;
+  background: none; color: var(--accent); font-family: inherit; font-size: 14.5px; font-weight: 600; line-height: 1; cursor: pointer; white-space: nowrap;
 }
 .done-btn:hover { background: var(--accent-soft); }
 .done-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
