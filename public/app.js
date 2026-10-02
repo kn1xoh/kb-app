@@ -78,6 +78,8 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const debounce = (fn, ms) => { let t; const d = (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; d.cancel = () => clearTimeout(t); return d; };
+// старые ключи: раньше запоминали, развёрнуты ли «Недавно удалённые» и «Завершённые»
+try { ['kb-trash-open', 'kb-task-trash-open', 'kb-done-open'].forEach((k) => localStorage.removeItem(k)); } catch { /* storage unavailable */ }
 const store = {
   get(k, def) { try { const v = localStorage.getItem(k); return v === null ? def : JSON.parse(v); } catch { return def; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
@@ -292,12 +294,13 @@ const S = {
   selectMode: false, // bulk selection on the notes home
   selected: new Set(),
   trash: null, // «Недавно удалённые» заметки: { days, items }, null — ещё не загружено
-  trashOpen: store.get('kb-trash-open', false),
+  // свёрнутые блоки при каждом заходе в раздел скрыты (см. route), состояние не запоминается
+  trashOpen: false,
   taskSelect: false, // режим «Выбрать» в Задачах
   taskSelected: new Set(),
   taskTrash: null, // «Недавно удалённые» задачи: { days, items }
-  taskTrashOpen: store.get('kb-task-trash-open', false),
-  doneOpen: store.get('kb-done-open', false), // блок «Завершённые» развёрнут
+  taskTrashOpen: false,
+  doneOpen: false, // блок «Завершённые» развёрнут
   doneAll: false,
 };
 const saveExpanded = () => store.set('kb-expanded', [...S.expanded]);
@@ -714,6 +717,7 @@ async function route() {
   if (section !== 'notes' || id) { S.selectMode = false; S.selected.clear(); }
   S.taskSelect = false;
   S.taskSelected.clear();
+  S.trashOpen = S.taskTrashOpen = S.doneOpen = S.doneAll = false;
   if (section === 'tasks') {
     // #/tasks/ID — ссылка из уведомления: открываем задачу, адрес возвращаем к разделу
     if (id) {
@@ -1218,7 +1222,6 @@ function trashSection() {
 function bindTrash() {
   $('#trash-toggle').onclick = () => {
     S.trashOpen = !S.trashOpen;
-    store.set('kb-trash-open', S.trashOpen);
     renderNotesHome();
   };
   $('#trash-clear')?.addEventListener('click', async () => {
@@ -2309,8 +2312,8 @@ function bindTasksBody(body) {
   body.addEventListener('click', async (e) => {
     const fold = e.target.closest('[data-fold]');
     if (fold) {
-      if (fold.dataset.fold === 'done') { S.doneOpen = !S.doneOpen; store.set('kb-done-open', S.doneOpen); }
-      else { S.taskTrashOpen = !S.taskTrashOpen; store.set('kb-task-trash-open', S.taskTrashOpen); }
+      if (fold.dataset.fold === 'done') S.doneOpen = !S.doneOpen;
+      else S.taskTrashOpen = !S.taskTrashOpen;
       return renderTasksBody();
     }
     if (e.target.closest('[data-done-all]')) { S.doneAll = true; return renderTasksBody(); }
