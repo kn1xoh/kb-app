@@ -3271,6 +3271,7 @@ function openStatusesDialog({ focus = null } = {}) {
     <h3 class="set-caption">Статусы</h3>
     <p>Статусы — это колонки на доске и группы в списке. «${esc(statusOf('todo').name)}» нельзя удалить — в него переходят задачи удалённого статуса, — но можно переименовать и перекрасить. Готовую задачу завершают кнопкой в её карточке, она попадает в блок «Завершённые».</p>
     <div class="st-list" id="st-list"></div>
+    <div class="st-add-row"><button type="button" class="btn ghost" id="st-add">${icon('plus')}Добавить статус</button></div>
     <div class="st-default">
       <label for="st-default">Новые задачи попадают в</label>
       <select id="st-default"></select>
@@ -3280,8 +3281,7 @@ function openStatusesDialog({ focus = null } = {}) {
       <span class="set-text"><b>Напоминания на этом устройстве</b><span id="push-text"></span></span>
       <input type="checkbox" class="switch" id="set-push" role="switch">
     </label>
-    <div class="modal-actions st-actions">
-      <button type="button" class="btn" id="st-add">${icon('plus')}Добавить статус</button>
+    <div class="modal-actions">
       <button type="button" class="btn primary" data-close>Готово</button>
     </div>`, 'statuses');
   const list = $('#st-list', m);

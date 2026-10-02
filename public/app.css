@@ -709,7 +709,9 @@ svg.i.filled { fill: currentColor; }
 .st-color:hover { box-shadow: 0 0 0 2px var(--muted); }
 .st-color.on { color: #fff; box-shadow: 0 0 0 2px var(--fg); }
 .st-color svg.i { width: 14px; height: 14px; stroke-width: 3; }
-.st-actions { justify-content: space-between; }
+/* «Добавить статус» — сразу под списком статусов */
+.st-add-row { margin-top: 8px; }
+.st-add-row .btn { padding-left: 8px; color: var(--accent); }
 .st-default {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; padding-top: 16px;
   border-top: 1px solid var(--line); font-size: 14px;
