@@ -2973,6 +2973,7 @@ function openDatePicker(anchor, value, onPick, opts = {}) {
   const base = value ? new Date(value + 'T00:00') : today;
   let year = base.getFullYear(), month = base.getMonth();
   let focusDay = value || tStr;
+  let pressedInside = false;
 
   const box = document.createElement('div');
   box.className = 'menu datepicker';
@@ -3010,17 +3011,27 @@ function openDatePicker(anchor, value, onPick, opts = {}) {
       ${value ? `<button type="button" class="dp-clear" data-clear>${icon('x')}${clearLabel}</button>` : ''}`;
     const ti = $('#dp-time-in', box);
     if (!ti) return;
-    // время меняется на месте: если дата уже выбрана — сохраняем сразу, календарь остаётся открытым
+    // время сохраняется сразу; когда поле времени теряет фокус (на iPhone — «Готово» над колесом, на ПК — Enter
+    // или клик мимо) и дата уже выбрана — календарь закрывается
     const setTime = (v) => {
       if ((v || null) === time || (needTime && !v)) return;
       time = v || null;
       if (value) onPick(value, time);
       const x = $('[data-notime]', box);
       if (!time && x) x.remove();
-      else if (time && !x && !needTime) render(), $('#dp-time-in', box).focus();
+      else if (time && !x && !needTime) {
+        ti.insertAdjacentHTML('afterend', `<button type="button" class="icon-btn dp-time-x" data-notime title="Без времени" aria-label="Без времени">${icon('x')}</button>`);
+      }
     };
+    const finish = () => { setTime(ti.value); if (value && box.isConnected) { cleanup(); anchor.focus({ preventScroll: true }); } };
     ti.addEventListener('change', () => setTime(ti.value));
-    ti.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); setTime(ti.value); if (value) done(value); } });
+    ti.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); finish(); } });
+    ti.addEventListener('blur', (e) => {
+      // нажали внутри календаря (день, стрелки, «Без времени») — эта кнопка сама решит, закрывать ли
+      // (в Safari кнопки фокус не получают, поэтому смотрим и на relatedTarget, и на нажатие)
+      if (pressedInside || (e.relatedTarget && box.contains(e.relatedTarget))) return;
+      if (ti.value || !time) finish();
+    });
   }
   function place() {
     const r = anchor.getBoundingClientRect();
@@ -3060,6 +3071,7 @@ function openDatePicker(anchor, value, onPick, opts = {}) {
     const day = e.target.closest('[data-d]');
     if (day) done(day.dataset.d);
   });
+  box.addEventListener('pointerdown', (e) => { if (e.target.id === 'dp-time-in') return; pressedInside = true; setTimeout(() => { pressedInside = false; }, 600); });
   box.addEventListener('keydown', (e) => {
     if (!e.target.classList.contains('dp-day')) return;
     const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
