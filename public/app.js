@@ -3375,6 +3375,29 @@ async function openUsersDialog() {
   vv.addEventListener('scroll', later);
   // клавиатура уезжает с анимацией — проверяем ещё раз, когда она закончится
   document.addEventListener('focusout', () => { later(); setTimeout(later, 350); setTimeout(later, 800); });
+
+  // ВРЕМЕННО: замеры для поиска причины сдвига на iPhone (убрать после исправления)
+  if (!matchMedia('(pointer: coarse)').matches) return;
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;left:0;top:0;width:1px;visibility:hidden;pointer-events:none;height:100vh';
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;z-index:99;left:8px;top:calc(env(safe-area-inset-top,0px) + 4px);font:11px/1.35 monospace;' +
+    'background:rgb(0 0 0/.75);color:#7fffb0;padding:4px 6px;border-radius:6px;pointer-events:none;white-space:pre';
+  document.body.append(probe, box);
+  const ph = (h) => { probe.style.height = h; return Math.round(probe.getBoundingClientRect().height); };
+  const show = () => {
+    const sh = document.querySelector('.shell')?.getBoundingClientRect();
+    const fb = document.querySelector('#fab')?.getBoundingClientRect();
+    const sb = ph('env(safe-area-inset-bottom, 0px)');
+    box.textContent =
+      `inner ${innerWidth}×${innerHeight}  screen ${screen.height}\n` +
+      `vv h ${Math.round(vv.height)} top ${Math.round(vv.offsetTop)} pageTop ${Math.round(vv.pageTop)}\n` +
+      `scrollY ${Math.round(scrollY)}  html ${root.clientHeight}  body ${document.body.scrollTop}\n` +
+      `vh ${ph('100vh')} dvh ${ph('100dvh')} svh ${ph('100svh')} lvh ${ph('100lvh')} safeB ${sb}\n` +
+      `shell ${sh ? Math.round(sh.top) + '…' + Math.round(sh.bottom) : '-'}  fab ${fb && fb.height ? Math.round(fb.bottom) : '-'}\n` +
+      `gap ${root.style.getPropertyValue('--vv-gap') || 0}`;
+  };
+  setInterval(show, 400); show();
 })();
 
 boot();
