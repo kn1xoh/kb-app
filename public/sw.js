@@ -33,7 +33,7 @@ async function decrypt(s, userId) {
 
 const pad = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-// «Срок: сегодня, 14:30» / «Срок: пт, 9 окт»
+// «Сегодня, 14:30» / «Пт, 9 окт»
 function dueText(date, time) {
   if (!date) return '';
   const today = new Date();
@@ -47,8 +47,12 @@ function dueText(date, time) {
     const d = new Date(`${date}T00:00`);
     label = `${d.toLocaleDateString('ru-RU', { weekday: 'short' })}, ${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '')}`;
   }
-  return `Срок: ${label}${time ? `, ${time}` : ''}`;
+  const text = `${label}${time ? `, ${time}` : ''}`;
+  return text[0].toUpperCase() + text.slice(1);
 }
+const PRIORITY = { high: 'Высокий приоритет', medium: 'Средний приоритет', low: 'Низкий приоритет' };
+// Вторая строка уведомления: «Сегодня, 14:30 · Высокий приоритет · В работе»
+const details = (d) => [dueText(d.due_date, d.due_time), PRIORITY[d.priority], d.status].filter(Boolean).join(' · ');
 
 self.addEventListener('push', (e) => {
   e.waitUntil((async () => {
@@ -59,7 +63,7 @@ self.addEventListener('push', (e) => {
       const title = await decrypt(data.title, data.u);
       return self.registration.showNotification(title || 'Напоминание о задаче', {
         ...base,
-        body: dueText(data.due_date, data.due_time) || 'Напоминание о задаче',
+        body: details(data) || 'Напоминание о задаче',
         tag: `task-${data.id}`,
         renotify: true,
         data: { task: data.id },

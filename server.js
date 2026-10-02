@@ -847,9 +847,12 @@ async function sendReminders() {
   if (remindBusy) return;
   remindBusy = true;
   try {
-    const due = await db.all(`SELECT id, user_id, title, due_date, due_time, remind_at FROM tasks
-      WHERE reminded_at IS NULL AND remind_at IS NOT NULL AND remind_at <= datetime('now')
-      AND deleted_at IS NULL AND completed_at IS NULL ORDER BY remind_at LIMIT 200`);
+    // название статуса не шифруется (как и приоритет) — его можно показать в уведомлении
+    const due = await db.all(`SELECT t.id, t.user_id, t.title, t.due_date, t.due_time, t.remind_at, t.priority,
+      (SELECT s.name FROM task_statuses s WHERE s.user_id = t.user_id AND s.key = t.status) AS status_name
+      FROM tasks t
+      WHERE t.reminded_at IS NULL AND t.remind_at IS NOT NULL AND t.remind_at <= datetime('now')
+      AND t.deleted_at IS NULL AND t.completed_at IS NULL ORDER BY t.remind_at LIMIT 200`);
     if (!due.length) return;
     // Сначала отмечаем отправленными — чтобы при сбое сети одно напоминание не пришло несколько раз
     await db.tx(async () => {
@@ -863,7 +866,7 @@ async function sendReminders() {
       await pushToSubs(subs, {
         kind: 'task', id: t.id, u: t.user_id,
         title: t.title.length <= 3000 ? t.title : '', // у уведомления ограничен размер
-        due_date: t.due_date, due_time: t.due_time,
+        due_date: t.due_date, due_time: t.due_time, priority: t.priority, status: t.status_name || '',
       });
     }
   } catch (e) {
