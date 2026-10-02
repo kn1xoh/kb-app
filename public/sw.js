@@ -5,35 +5,54 @@
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
-const keyFor = (userId) => new Promise((resolve) => {
+// Ключ на этом устройстве: CryptoKey (u<id>) и его копия байтами (raw-u<id>). Копия нужна потому,
+// что на iPhone фоновый обработчик уведомлений не всегда может прочитать CryptoKey из базы браузера
+const readKeys = (userId) => new Promise((resolve) => {
   const r = indexedDB.open('silo', 1);
   r.onupgradeneeded = () => r.result.createObjectStore('keys');
-  r.onerror = () => resolve(null);
+  r.onerror = () => resolve({ err: 'idb' });
   r.onsuccess = () => {
     const d = r.result;
     try {
-      const q = d.transaction('keys', 'readonly').objectStore('keys').get(`u${userId}`);
-      q.onsuccess = () => { d.close(); resolve(q.result || null); };
-      q.onerror = () => { d.close(); resolve(null); };
-    } catch { d.close(); resolve(null); }
+      const store = d.transaction('keys', 'readonly').objectStore('keys');
+      const out = {};
+      const a = store.get(`u${userId}`);
+      const b = store.get(`raw-u${userId}`);
+      a.onsuccess = () => { out.key = a.result || null; };
+      a.onerror = (ev) => { ev.preventDefault(); out.keyErr = String(a.error?.name || 'err'); };
+      b.onsuccess = () => { out.raw = b.result || null; };
+      b.onerror = (ev) => { ev.preventDefault(); };
+      a.transaction.oncomplete = () => { d.close(); resolve(out); };
+      a.transaction.onabort = () => { d.close(); resolve({ ...out, err: out.keyErr || 'abort' }); };
+    } catch (e) { d.close(); resolve({ err: String(e?.name || 'tx') }); }
   };
 });
 
+// Возвращает { text } или { text: '', why } — why временно показывается в уведомлении,
+// чтобы понять, почему на устройстве не расшифровалось название
 async function decrypt(s, userId) {
-  if (!s) return '';
-  if (!s.startsWith('e1:')) return s;
-  try {
-    const key = await keyFor(userId);
-    if (!key) return '';
-    const all = Uint8Array.from(atob(s.slice(3)), (c) => c.charCodeAt(0));
-    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: all.subarray(0, 12) }, key, all.subarray(12));
-    return new TextDecoder().decode(plain);
-  } catch { return ''; }
+  if (!s) return { text: '', why: 'пустое' };
+  if (!s.startsWith('e1:')) return { text: s };
+  const k = await readKeys(userId);
+  const all = Uint8Array.from(atob(s.slice(3)), (c) => c.charCodeAt(0));
+  const open = async (key) => new TextDecoder().decode(
+    await crypto.subtle.decrypt({ name: 'AES-GCM', iv: all.subarray(0, 12) }, key, all.subarray(12)));
+  let why = k.err || (k.keyErr ? `ключ: ${k.keyErr}` : '');
+  if (k.key) {
+    try { return { text: await open(k.key) }; } catch (e) { why = `ключ: ${e?.name || 'ошибка'}`; }
+  }
+  if (k.raw) {
+    try {
+      const key = await crypto.subtle.importKey('raw', k.raw, { name: 'AES-GCM' }, false, ['decrypt']);
+      return { text: await open(key) };
+    } catch (e) { why = `копия: ${e?.name || 'ошибка'}`; }
+  }
+  return { text: '', why: why || (k.key || k.raw ? 'не подошёл' : 'нет ключа — войдите в Silo заново') };
 }
 
 const pad = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-// «Сегодня, 14:30» / «Пт, 9 окт»
+// «Срок: сегодня, 14:30» / «Срок: пт, 9 окт»
 function dueText(date, time) {
   if (!date) return '';
   const today = new Date();
@@ -47,12 +66,8 @@ function dueText(date, time) {
     const d = new Date(`${date}T00:00`);
     label = `${d.toLocaleDateString('ru-RU', { weekday: 'short' })}, ${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '')}`;
   }
-  const text = `${label}${time ? `, ${time}` : ''}`;
-  return text[0].toUpperCase() + text.slice(1);
+  return `Срок: ${label}${time ? `, ${time}` : ''}`;
 }
-const PRIORITY = { high: 'Высокий приоритет', medium: 'Средний приоритет', low: 'Низкий приоритет' };
-// Вторая строка уведомления: «Сегодня, 14:30 · Высокий приоритет · В работе»
-const details = (d) => [dueText(d.due_date, d.due_time), PRIORITY[d.priority], d.status].filter(Boolean).join(' · ');
 
 self.addEventListener('push', (e) => {
   e.waitUntil((async () => {
@@ -61,9 +76,11 @@ self.addEventListener('push', (e) => {
     const base = { icon: '/icons/icon-192.png', lang: 'ru' };
     if (data.kind === 'task') {
       const title = await decrypt(data.title, data.u);
-      return self.registration.showNotification(title || 'Напоминание о задаче', {
+      const due = dueText(data.due_date, data.due_time);
+      return self.registration.showNotification(title.text || 'Напоминание о задаче', {
         ...base,
-        body: details(data) || 'Напоминание о задаче',
+        // временно: если название не расшифровалось — причина в скобках (убрать, когда починим)
+        body: [due || (title.text ? 'Напоминание' : ''), title.why && `(${title.why})`].filter(Boolean).join(' ') || 'Напоминание',
         tag: `task-${data.id}`,
         renotify: true,
         data: { task: data.id },

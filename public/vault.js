@@ -102,14 +102,27 @@ const Vault = (() => {
       return { auth, open: async (wrapped) => { key = await unwrapWith(kek, wrapped); } };
     },
 
-    async save(userId) { await idbDo('readwrite', (s) => s.put(key, `u${userId}`)); },
+    // Рядом с ключом — его копия байтами (raw-u<id>): её читает sw.js, чтобы показать в уведомлении
+    // название задачи (на iPhone фоновый обработчик не всегда может прочитать сам CryptoKey)
+    async save(userId) {
+      await idbDo('readwrite', (s) => s.put(key, `u${userId}`));
+      await this.saveRaw(userId);
+    },
+    async saveRaw(userId) {
+      try {
+        const raw = await crypto.subtle.exportKey('raw', key);
+        await idbDo('readwrite', (s) => s.put(raw, `raw-u${userId}`));
+      } catch { /* без копии уведомление покажет «Напоминание о задаче» */ }
+    },
     async load(userId) {
       try { key = (await idbDo('readonly', (s) => s.get(`u${userId}`))) || null; } catch { key = null; }
+      // устройства, где вошли до появления копии, получают её при следующем открытии Silo
+      if (key && !(await idbDo('readonly', (s) => s.get(`raw-u${userId}`)).catch(() => null))) await this.saveRaw(userId);
       return !!key;
     },
     async forget(userId) {
       key = null;
-      try { await idbDo('readwrite', (s) => s.delete(`u${userId}`)); } catch { /* ignore */ }
+      try { await idbDo('readwrite', (s) => { s.delete(`u${userId}`); s.delete(`raw-u${userId}`); }); } catch { /* ignore */ }
     },
 
     isSealed: (v) => typeof v === 'string' && v.startsWith(PREFIX),
