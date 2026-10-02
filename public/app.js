@@ -1322,7 +1322,7 @@ async function openPage(id) {
   saveExpanded();
   renderTree();
   $('#main').innerHTML = `
-    ${topbar('<nav class="crumbs" id="crumbs"></nav><span class="save-state" id="save-state"></span><button class="icon-btn fav-btn" id="page-fav"></button><button class="icon-btn" id="page-more" aria-label="Действия с заметкой">' + icon('more') + '</button>')}
+    ${topbar('<nav class="crumbs" id="crumbs"></nav><span class="save-state" id="save-state"></span><button class="icon-btn fav-btn" id="page-fav"></button><button class="icon-btn" id="page-more" aria-label="Действия с заметкой">' + icon('more') + '</button><button class="done-btn" id="page-done" title="Закрыть заметку">Готово</button>')}
     <article class="page">
       <textarea class="page-title" id="page-title" rows="1" placeholder="Без названия" maxlength="300">${esc(page.title)}</textarea>
       <div class="page-meta"><span id="page-num"></span><span id="page-changed">Изменено ${ago(page.updated_at)}</span></div>
@@ -1350,6 +1350,11 @@ async function openPage(id) {
   const editor = $('#editor');
   $('#toolbar-slot').replaceWith(makeEditor(editor, () => queuePageSave({ content: serializeEditor(editor) })));
   $('#page-more').onclick = (e) => openPageMenu(e.currentTarget, id);
+  // «Готово» — на уровень выше: к родительской заметке или к списку заметок
+  $('#page-done').onclick = () => {
+    const parent = (pageById(id) || S.page).parent_id;
+    location.hash = parent && pageById(parent) ? `#/notes/${parent}` : '#/notes';
+  };
   updatePageFavButton();
   $('#page-fav').onclick = () => setPageFavorite(pageById(id) || S.page, !S.page.favorite_at);
   presealPage();
@@ -2644,7 +2649,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
           <span class="save-state tp-save" aria-live="polite"></span>
           <button class="icon-btn fav-btn" id="tp-fav" data-id="${t.id}"></button>
           <button class="icon-btn" id="tp-delete" title="Удалить задачу" aria-label="Удалить задачу">${icon('trash')}</button>
-          <button class="icon-btn" id="tp-close" title="Закрыть (Esc)" aria-label="Закрыть">${icon('x')}</button>
+          <button class="done-btn" id="tp-close" title="Закрыть (Esc)">Готово</button>
         </div>
       </div>
       <div class="props">
