@@ -1156,3 +1156,11 @@ body:has(.bulk-bar) #toasts { bottom: calc(84px + env(safe-area-inset-bottom, 0p
 .datepicker .dp-foot .dp-clear { justify-content: center; border-top: 0; border-radius: 6px; padding: 6px 8px; }
 @media (max-width: 860px), (pointer: coarse) { .datepicker .dp-foot .dp-done { height: var(--tap); font-size: 16px; } }
 .datepicker .dp-foot .dp-done:hover, .datepicker .dp-foot .dp-done:focus-visible { background: var(--accent); color: var(--accent-fg); }
+
+/* Панель форматирования не уезжает при прокрутке и на телефоне с открытой клавиатурой */
+.editor-box .toolbar { position: sticky; top: 0; z-index: 2; }
+/* Телефон с клавиатурой: приложение занимает только видимую над клавиатурой часть экрана
+   (iPhone не уменьшает страницу под клавиатуру, а сдвигает её вверх). --kb-top / --kb-h ставит JS */
+html.kb-open .shell { position: fixed; left: 0; right: 0; top: var(--kb-top, 0px); height: var(--kb-h, 100%); }
+html.kb-open .overlay { inset: auto 0 auto 0; top: var(--kb-top, 0px); height: var(--kb-h, 100%); }
+html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h, 100%); padding-bottom: 0; }

@@ -3641,4 +3641,60 @@ async function openUsersDialog() {
   });
 }
 
+// Телефон: пока открыта клавиатура, подгоняем приложение под видимую часть экрана.
+// iPhone не уменьшает страницу под клавиатуру, а сдвигает её вверх — вместе с панелью форматирования.
+(function fitAppToKeyboard() {
+  const vv = window.visualViewport;
+  if (!vv || !matchMedia('(pointer: coarse)').matches) return;
+  const root = document.documentElement;
+  const typing = () => document.activeElement?.matches?.('input, textarea, [contenteditable="true"]');
+  let raf = 0;
+  const sync = () => {
+    raf = 0;
+    const open = typing() && vv.scale < 1.01 && window.innerHeight - vv.height > 80;
+    if (!open) {
+      if (root.classList.contains('kb-open')) {
+        root.classList.remove('kb-open');
+        root.style.removeProperty('--kb-top');
+        root.style.removeProperty('--kb-h');
+        if (window.scrollY) window.scrollTo(0, 0);
+      }
+      return;
+    }
+    root.style.setProperty('--kb-top', Math.round(vv.offsetTop) + 'px');
+    root.style.setProperty('--kb-h', Math.round(vv.height) + 'px');
+    const first = !root.classList.contains('kb-open');
+    root.classList.add('kb-open');
+    if (first) keepCaretVisible();
+  };
+  const later = () => { if (!raf) raf = requestAnimationFrame(sync); };
+  vv.addEventListener('resize', later);
+  vv.addEventListener('scroll', later);
+  document.addEventListener('focusin', () => { later(); setTimeout(later, 350); });
+  document.addEventListener('focusout', () => { later(); setTimeout(later, 350); });
+  // курсор в редакторе не должен прятаться под панелью форматирования или за краем экрана
+  document.addEventListener('input', (e) => { if (root.classList.contains('kb-open') && e.target.closest?.('.editor')) keepCaretVisible(); });
+})();
+
+function keepCaretVisible() {
+  const ed = document.activeElement?.closest?.('.editor');
+  const sel = getSelection();
+  if (!ed || !sel.rangeCount) return;
+  const box = ed.closest('.main, .panel-body');
+  if (!box) return;
+  const r = sel.getRangeAt(0);
+  let rect = r.getClientRects()[0];
+  if (!rect) {
+    const n = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
+    rect = n?.getBoundingClientRect();
+  }
+  if (!rect) return;
+  const b = box.getBoundingClientRect();
+  const bar = box.querySelector('.toolbar')?.getBoundingClientRect();
+  const top = Math.max(b.top, bar ? bar.bottom : b.top) + 8;
+  const bottom = b.bottom - 16;
+  if (rect.bottom > bottom) box.scrollTop += rect.bottom - bottom;
+  else if (rect.top < top) box.scrollTop -= top - rect.top;
+}
+
 boot();
