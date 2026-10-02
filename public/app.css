@@ -1175,7 +1175,18 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
 
 /* панель «Не сохранено … Повторить»: висит, пока правки не дойдут до сервера */
 .unsaved-bar { animation: none; }
-.unsaved-bar .toast-action { color: #fff; }
+.unsaved-bar.error .toast-action { color: #fff; }
 .unsaved-bar .toast-action:disabled { opacity: .6; text-decoration: none; cursor: default; }
 @media (max-width: 860px), (pointer: coarse) { .unsaved-bar .toast-action { min-height: var(--tap); padding: 0 4px; } }
 .save-state.unsaved { color: var(--danger); }
+
+/* ---------- правки ждут отправки: «Сохранено на устройстве» ---------- */
+.unsaved-bar .ub-text { display: grid; gap: 1px; min-width: 0; }
+.unsaved-bar .ub-text b { font-weight: 600; }
+.unsaved-bar .ub-text span:empty { display: none; }
+.unsaved-bar .ub-text span { font-size: 12.5px; opacity: .8; }
+.unsaved-bar.local .toast-action { color: var(--accent-soft); }
+.unsaved-bar.done { background: var(--accent); color: var(--accent-fg); }
+.unsaved-bar.done svg.i { width: 14px; height: 14px; stroke-width: 2.6; margin-right: 6px; vertical-align: -2px; }
+.save-state.local { color: var(--warn); }
+.saved-mark.local { color: var(--warn); }

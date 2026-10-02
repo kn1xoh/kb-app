@@ -157,7 +157,8 @@ async function openBody(v, k = '') {
   return out;
 }
 
-async function api(method, url, body) {
+async function api(method, url, body, { fresh = false } = {}) {
+  const plain = body;
   if (body !== undefined && Vault.ready()) body = await sealBody(body);
   const res = await fetch(url, {
     method,
@@ -168,7 +169,10 @@ async function api(method, url, body) {
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && S.user) { S.user = null; renderAuth(); }
   if (!res.ok) throw Object.assign(new Error(data.error || 'Что-то пошло не так. Попробуйте ещё раз'), { status: res.status });
-  return Vault.ready() ? openBody(data) : data;
+  const out = Vault.ready() ? await openBody(data) : data;
+  trackServer(method, url, plain, out);
+  if (method === 'GET' && !fresh) Unsaved.overlay(url, out);
+  return out;
 }
 
 // Запросы при закрытии вкладки уходят синхронно, а шифрование асинхронное. Поэтому тексты шифруются
@@ -273,7 +277,9 @@ function paintSavedMark() {
   if (m.state === 'ok' && left <= 0) return;
   const sub = m.kind === 'task' ? $('#tasks-sub') : $('.notes-home .home-sub');
   if (!sub) return;
+  const local = m.state === 'fail' && Unsaved.items.size && Unsaved.stored; // правки ждут отправки, но они на устройстве
   sub.insertAdjacentHTML('beforeend', m.state === 'saving' ? '<span class="saved-mark saving">Сохранение…</span>'
+    : local ? `<span class="saved-mark local">${icon('check')}Сохранено на устройстве</span>`
     : m.state === 'fail' ? '<span class="saved-mark fail">Не сохранено</span>'
     : `<span class="saved-mark ok">${icon('check')}Сохранено</span>`);
   // при перерисовке раздела отметка не начинает гаснуть заново
@@ -281,89 +287,278 @@ function paintSavedMark() {
 }
 
 // ---------- несохранённые изменения ----------
-// Если запрос на сохранение не прошёл (нет сети, сервер недоступен), правки не теряются: они ждут здесь,
-// а внизу висит панель «Не сохранено … Повторить». Повтор — по кнопке, сам раз в 20 секунд,
-// при появлении сети и после любого удачного сохранения.
+// Если запрос на сохранение не прошёл (нет сети, сервер недоступен), правки не теряются: они ждут здесь
+// и сразу записываются на это устройство (в IndexedDB, зашифрованными тем же ключом, что и данные).
+// Закрыли вкладку без связи — при следующем открытии Silo они отправятся на сервер.
+// Повтор — по кнопке, сам раз в 20 секунд, при появлении сети и после любого удачного сохранения.
+
+// Что сейчас лежит на сервере: последние известные название и текст каждой заметки/задачи.
+// По ним при отправке отложенных правок видно, не изменили ли тот же текст на другом устройстве.
+const Known = new Map(); // 'page:5' → { title, content } / 'task:7' → { title, description }
+const TEXT_FIELDS = ['title', 'content', 'description'];
+const normText = (f, v) => (f === 'title' ? String(v ?? '') : cleanHtml(String(v ?? '')));
+function rememberServer(kind, id, obj) {
+  if (!obj || !Number.isInteger(Number(id))) return;
+  const key = `${kind}:${Number(id)}`;
+  const k = Known.get(key) || {};
+  TEXT_FIELDS.forEach((f) => { if (typeof obj[f] === 'string' && !Vault.isSealed(obj[f])) k[f] = normText(f, obj[f]); });
+  Known.set(key, k);
+}
+const itemUrl = (url) => url.match(/^\/api\/(pages|tasks)(?:\/(\d+))?(\/finalize)?$/);
+function trackServer(method, url, sent, got) {
+  const m = itemUrl(url);
+  if (!m) return;
+  const kind = m[1] === 'pages' ? 'page' : 'task';
+  if (Array.isArray(got)) { got.forEach((x) => rememberServer(kind, x.id, x)); return; }
+  if (m[2] && method !== 'GET' && sent && !got?.deleted) rememberServer(kind, m[2], sent);
+  if (got?.id != null) rememberServer(kind, got.id, got);
+}
+
+// Хранилище на устройстве: одна запись на пользователя — вся очередь одним зашифрованным текстом
+const Outbox = {
+  open: () => new Promise((resolve, reject) => {
+    const r = indexedDB.open('silo-outbox', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('q');
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  }),
+  async run(mode, fn) {
+    const d = await this.open();
+    return new Promise((resolve, reject) => {
+      const tx = d.transaction('q', mode);
+      const req = fn(tx.objectStore('q'));
+      tx.oncomplete = () => { d.close(); resolve(req?.result); };
+      tx.onerror = () => { d.close(); reject(tx.error); };
+    });
+  },
+};
+
 const Unsaved = {
-  items: new Map(), // 'page:5' / 'task:7' → { url, data, name }
+  items: new Map(), // 'page:5' / 'task:7' → { url, data, name, base } (base — текст на сервере до этих правок)
   busy: false,
   timer: null,
+  stored: true, // удаётся ли записывать на устройство (в приватном режиме может не получиться)
+  chain: Promise.resolve(),
+  doneTimer: 0,
   add(key, url, data, name) {
     const old = this.items.get(key);
-    this.items.set(key, { url, data: { ...(old?.data || {}), ...data }, name: name || old?.name || '' });
+    const base = { ...(old?.base || {}) };
+    const known = Known.get(key) || {};
+    Object.keys(data).forEach((f) => { if (TEXT_FIELDS.includes(f) && !(f in base) && f in known) base[f] = known[f]; });
+    this.items.set(key, { url, data: { ...(old?.data || {}), ...data }, name: name || old?.name || '', base });
     preseal(...Object.values(data).filter((v) => typeof v === 'string'));
     if (!this.timer) this.timer = setInterval(() => this.retry(true), 20000);
+    this.store();
     this.paint();
   },
   // Удачное сохранение: отправленные поля новее тех, что ждали, — их больше не повторяем
   saved(key, data) {
     const it = this.items.get(key);
     if (it) {
-      Object.keys(data).forEach((k) => delete it.data[k]);
+      Object.keys(data).forEach((k) => { delete it.data[k]; delete it.base[k]; });
       if (!Object.keys(it.data).length) this.items.delete(key);
+      this.store();
+      if (!this.items.size) this.finished([key]);
       this.paint();
     }
     if (this.items.size) setTimeout(() => this.retry(true), 0);
   },
+  // Как назвать состояние «правки ждут отправки»
+  label() { return this.stored ? 'Сохранено на устройстве' : 'Не сохранено'; },
+
+  store() {
+    const uid = S.user?.id;
+    if (!uid) return;
+    const list = [...this.items];
+    this.chain = this.chain.then(async () => {
+      if (!list.length) await Outbox.run('readwrite', (s) => s.delete(`u${uid}`));
+      else {
+        const blob = await Vault.encrypt(JSON.stringify(list));
+        await Outbox.run('readwrite', (s) => s.put(blob, `u${uid}`));
+      }
+      if (!this.stored) { this.stored = true; this.paint(); }
+    }).catch(() => { this.stored = false; this.paint(); });
+    return this.chain;
+  },
+  async load(uid) {
+    try {
+      const blob = await Outbox.run('readonly', (s) => s.get(`u${uid}`));
+      if (!blob) return;
+      const list = JSON.parse(await Vault.decrypt(blob));
+      list.forEach(([key, it]) => { if (!this.items.has(key)) this.items.set(key, { base: {}, ...it }); });
+      if (this.items.size && !this.timer) this.timer = setInterval(() => this.retry(true), 20000);
+    } catch { /* нечитаемая запись — пропускаем */ }
+  },
+  // Пока правки не отправлены, на экране показываем их, а не старую версию с сервера
+  overlay(url, got) {
+    const m = itemUrl(url);
+    if (!m || !this.items.size || !got) return;
+    const kind = m[1] === 'pages' ? 'page' : 'task';
+    const apply = (x, onlyPresent) => {
+      const it = x && this.items.get(`${kind}:${x.id}`);
+      if (it) Object.entries(it.data).forEach(([k, v]) => { if (!onlyPresent || k in x) x[k] = v; });
+    };
+    if (Array.isArray(got)) got.forEach((x) => apply(x, true));
+    else if (m[2]) apply(got, false);
+  },
+
   async retry(quiet = false) {
     if (this.busy || !this.items.size || !S.user) return;
     this.busy = true;
     this.paint();
     let lastError = null;
+    const sent = [];
     for (const [key, it] of [...this.items]) {
-      const data = { ...it.data };
-      try {
-        const r = await api('PATCH', it.url, data);
-        const cur = this.items.get(key);
-        if (cur) { Object.keys(data).forEach((k) => { if (cur.data[k] === data[k]) delete cur.data[k]; }); if (!Object.keys(cur.data).length) this.items.delete(key); }
-        this.applied(key, r);
-      } catch (e) {
-        // заметку или задачу уже удалили — сохранять некуда
-        if (e.status === 404) this.items.delete(key);
-        else lastError = e;
-      }
+      try { if (await this.send(key, it)) sent.push(key); } catch (e) { lastError = e; }
     }
     this.busy = false;
-    if (!this.items.size) { clearInterval(this.timer); this.timer = null; }
+    await this.store();
+    if (!this.items.size) this.finished(sent);
     this.paint();
-    if (!quiet) toast(lastError ? `Снова не получилось. ${lastError.message}` : 'Изменения сохранены', lastError ? 'error' : '');
+    if (!quiet && lastError) toast(`Снова не получилось. ${lastError.message}`, 'error');
+  },
+  // Отправка одной записи. Сначала смотрим, что сейчас на сервере: если тот же текст за это время
+  // изменили на другом устройстве — не затираем его, а сохраняем нашу версию отдельной копией
+  async send(key, it) {
+    const [kind, idStr] = key.split(':');
+    const id = Number(idStr);
+    const snap = { ...it.data };
+    const data = { ...snap };
+    const texts = TEXT_FIELDS.filter((f) => f in data);
+    let rescued = false;
+    if (texts.length) {
+      let cur = null;
+      try {
+        cur = kind === 'page' ? await api('GET', it.url, undefined, { fresh: true })
+          : (await api('GET', '/api/tasks', undefined, { fresh: true })).find((x) => x.id === id) || null;
+      } catch (e) { if (e.status !== 404) throw e; }
+      if (!cur) { // удалили на другом устройстве (или сервер убрал пустую) — текст не теряем
+        await this.rescue(kind, id, it, null);
+        this.items.delete(key);
+        return true;
+      }
+      let conflict = false;
+      texts.forEach((f) => {
+        const c = normText(f, cur[f]);
+        if (c === normText(f, data[f])) { delete data[f]; return; } // это уже на сервере
+        if (f in it.base && c !== it.base[f]) conflict = true;
+      });
+      if (conflict) {
+        await this.rescue(kind, id, it, cur);
+        texts.forEach((f) => delete data[f]);
+        rescued = true;
+      }
+    }
+    let r = null;
+    if (Object.keys(data).length) {
+      try { r = await api('PATCH', it.url, data); } catch (e) {
+        if (e.status !== 404) throw e;
+        this.items.delete(key); // удалили, а текста среди правок нет — сохранять некуда
+        return false;
+      }
+    }
+    const now = this.items.get(key);
+    if (now) {
+      Object.keys(snap).forEach((k) => { if (now.data[k] === snap[k]) { delete now.data[k]; delete now.base[k]; } });
+      // за время отправки дописали ещё — сравнивать будем уже с тем, что сейчас на сервере
+      Object.keys(now.data).forEach((k) => { const kn = Known.get(key); if (kn && k in kn) now.base[k] = kn[k]; });
+      if (!Object.keys(now.data).length) this.items.delete(key);
+    }
+    this.applied(key, r, rescued);
+    return true;
+  },
+  // Наша версия — в новую заметку/задачу рядом
+  async rescue(kind, id, it, cur) {
+    const d = it.data;
+    const body = kind === 'page' ? d.content ?? cur?.content ?? '' : d.description ?? cur?.description ?? '';
+    const title = (d.title ?? cur?.title ?? '').trim() || firstLine(body);
+    if (!title && !firstLine(body)) return; // ни названия, ни текста — сохранять нечего
+    const copyTitle = cur ? `${title || 'Без названия'} (копия)` : title;
+    if (kind === 'page') {
+      const parent = cur ? cur.parent_id : (pageById(id)?.parent_id ?? null);
+      const p = await api('POST', '/api/pages', { parent_id: parent, title: copyTitle })
+        .catch((e) => (e.status === 400 ? api('POST', '/api/pages', { parent_id: null, title: copyTitle }) : Promise.reject(e)));
+      if (body) await api('PATCH', `/api/pages/${p.id}`, { content: body });
+      if (S.pages) { S.pages = await api('GET', '/api/pages'); if ($('#main')) { renderTree(); updateCounts(); } }
+      toast(cur
+        ? `Заметку ${quoted(cur.title, '')} за это время изменили на другом устройстве. Ваша версия сохранена рядом — ${quoted(copyTitle, '')}`
+        : `Заметку ${quoted(title, '')} удалили на другом устройстве. Ваши изменения сохранены в новой заметке`);
+    } else {
+      const t = cur || S.tasks?.find((x) => x.id === id) || {};
+      const n = await api('POST', '/api/tasks', { title: copyTitle, status: t.status, priority: t.priority, due_date: t.due_date || null });
+      if (body || t.due_time) await api('PATCH', `/api/tasks/${n.id}`, { ...(body ? { description: body } : {}), ...(t.due_time ? { due_time: t.due_time } : {}) });
+      if (S.tasks) { S.tasks = await api('GET', '/api/tasks'); if ($('#tasks-body')) renderTasksBody(); }
+      toast(cur
+        ? `Задачу ${quoted(cur.title, '')} за это время изменили на другом устройстве. Ваша версия сохранена отдельной задачей — ${quoted(copyTitle, '')}`
+        : `Задачу ${quoted(title, '')} удалили на другом устройстве. Ваши изменения сохранены в новой задаче`);
+    }
   },
   // Ответ сервера после повтора — обновляем то, что на экране
-  applied(key, r) {
-    const [kind, id] = key.split(':');
+  applied(key, r, reload) {
+    const [kind, idStr] = key.split(':');
+    const id = Number(idStr);
     if (kind === 'page') {
-      const p = pageById(Number(id));
-      if (p && r.updated_at) p.updated_at = r.updated_at;
-      if (S.page?.id === Number(id) && !pendingSave && !this.items.has(key)) setSaveState('Сохранено');
+      const p = pageById(id);
+      if (p && r?.updated_at) p.updated_at = r.updated_at;
+      if (S.page?.id === id) {
+        // текст изменили на другом устройстве — показываем то, что теперь на сервере
+        if (reload && !pendingSave) { S.page = null; route(); return; }
+        if (!pendingSave && !this.items.has(key)) setSaveState('Сохранено');
+      }
     } else {
-      const t = S.tasks.find((x) => x.id === Number(id));
-      if (t) { Object.assign(t, r); renderTasksBody(); }
+      const t = S.tasks?.find((x) => x.id === id);
+      if (t && r) { Object.assign(t, r); if ($('#tasks-body')) renderTasksBody(); }
       const panelSave = $('.panel .tp-save');
-      if (panelSave && $('#tp-fav')?.dataset.id === id && !this.items.has(key)) { panelSave.textContent = 'Сохранено'; panelSave.classList.remove('unsaved'); }
+      if (panelSave && $('#tp-fav')?.dataset.id === idStr && !this.items.has(key)) { panelSave.textContent = 'Сохранено'; panelSave.classList.remove('unsaved', 'local'); }
     }
+  },
+  // Всё дошло до сервера: на месте панели на пару секунд — «Сохранено на сервере», в разделе — «✓ Сохранено»
+  finished(keys) {
+    clearInterval(this.timer);
+    this.timer = null;
+    const kinds = new Set(keys.map((k) => k.split(':')[0]));
+    kinds.forEach((k) => setSavedMark(k, 'ok'));
+    if (!$('#unsaved-bar')) return;
+    this.doneAt = Date.now();
+    clearTimeout(this.doneTimer);
+    this.doneTimer = setTimeout(() => { this.doneAt = 0; this.paint(); }, 3000);
   },
   paint() {
     let bar = $('#unsaved-bar');
-    if (!this.items.size) { bar?.remove(); return; }
+    const done = !this.items.size && this.doneAt;
+    if (!this.items.size && !done) { bar?.remove(); return; }
     if (!bar) {
       bar = document.createElement('div');
       bar.id = 'unsaved-bar';
-      bar.className = 'toast error unsaved-bar';
-      bar.setAttribute('role', 'alert');
-      bar.innerHTML = '<span class="ub-text"></span><button class="toast-action" type="button"></button>';
+      bar.setAttribute('role', 'status');
+      bar.innerHTML = '<span class="ub-text"><b></b><span></span></span><button class="toast-action" type="button"></button>';
       $('button', bar).onclick = () => this.retry();
       $('#toasts').prepend(bar);
     }
-    const list = [...this.items.values()];
-    const what = list.length === 1
-      ? (list[0].name ? `Не сохранено: ${list[0].name}` : 'Не сохранено')
-      : `Не сохранено: ${list.length} ${plural(list.length, 'изменение', 'изменения', 'изменений')}`;
-    $('.ub-text', bar).textContent = this.busy ? 'Сохранение…' : what;
+    bar.className = `toast unsaved-bar ${done ? 'done' : this.stored ? 'local' : 'error'}`;
     const btn = $('button', bar);
+    btn.hidden = !!done;
+    if (done) {
+      $('.ub-text b', bar).innerHTML = `${icon('check')}Сохранено на сервере`;
+      $('.ub-text span', bar).textContent = '';
+      return;
+    }
+    const list = [...this.items.values()];
+    const what = list.length === 1 ? (list[0].name || '1 изменение') : `${list.length} ${plural(list.length, 'изменение', 'изменения', 'изменений')}`;
+    $('.ub-text b', bar).textContent = this.busy ? 'Сохранение…' : this.label();
+    $('.ub-text span', bar).textContent = this.busy ? '' : this.stored ? `${what} · отправим, когда будет связь` : what;
     btn.textContent = 'Повторить';
     btn.disabled = this.busy;
   },
-  clear() { this.items.clear(); clearInterval(this.timer); this.timer = null; this.paint(); },
+  // Выход из аккаунта: очередь этого пользователя удаляется и с устройства
+  clear(uid) {
+    this.items.clear();
+    clearInterval(this.timer);
+    this.timer = null;
+    this.doneAt = 0;
+    if (uid) this.chain = this.chain.then(() => Outbox.run('readwrite', (s) => s.delete(`u${uid}`))).catch(() => {});
+    this.paint();
+  },
 };
 window.addEventListener('online', () => Unsaved.retry(true));
 const quoted = (s, def) => (s && s.trim() ? `«${s.trim().length > 40 ? `${s.trim().slice(0, 40)}…` : s.trim()}»` : def);
@@ -660,6 +855,9 @@ function renderCodeScreen(code, email, done, text) {
 }
 
 async function startApp() {
+  // правки, которые в прошлый раз не успели уйти на сервер, — отправляем до того, как показать данные
+  await Unsaved.load(S.user.id);
+  if (Unsaved.items.size) await Promise.race([Unsaved.retry(true), new Promise((r) => setTimeout(r, 8000))]);
   await encryptLeftovers();
   [S.pages, S.tasks, S.statuses] = await Promise.all([api('GET', '/api/pages'), api('GET', '/api/tasks'), api('GET', '/api/statuses')]);
   renderShell();
@@ -688,11 +886,12 @@ async function encryptLeftovers() {
 async function fixUntitled() {
   const stale = (s) => Date.now() - toDate(s) > 30 * 60e3;
   let changed = false;
-  for (const p of S.pages.filter((x) => !x.title.trim() && stale(x.updated_at) && x.id !== S.page?.id)) {
+  const waiting = (kind, id) => Unsaved.items.has(`${kind}:${id}`); // правки ещё не на сервере — не трогаем
+  for (const p of S.pages.filter((x) => !x.title.trim() && stale(x.updated_at) && x.id !== S.page?.id && !waiting('page', x.id))) {
     await finalizePage(p.id);
     changed = true;
   }
-  for (const t of S.tasks.filter((x) => !x.title.trim() && stale(x.updated_at))) {
+  for (const t of S.tasks.filter((x) => !x.title.trim() && stale(x.updated_at) && !waiting('task', x.id))) {
     if ($('.panel')) break;
     const line = firstLine(t.description);
     try {
@@ -1386,13 +1585,13 @@ async function flushPageSave() {
     if (p) { p.updated_at = r.updated_at; }
     if (S.page?.id === id) { const meta = $('#page-changed'); if (meta) meta.textContent = `Изменено ${ago(r.updated_at)}`; }
     Unsaved.saved(`page:${id}`, data);
-    setSaveState(Unsaved.items.has(`page:${id}`) ? 'Не сохранено' : 'Сохранено');
+    setSaveState(Unsaved.items.has(`page:${id}`) ? Unsaved.label() : 'Сохранено');
   } catch (e) {
     if (e.status === 404 || e.status === 401) { setSaveState(''); if (e.status === 404) fail(e); return; }
     pageSaveFailed.add(id);
-    setSaveState('Не сохранено');
-    // правки не теряем — их можно отправить ещё раз (панель «Не сохранено … Повторить»)
+    // правки не теряем: они сохраняются на устройстве и уйдут на сервер, когда будет связь
     Unsaved.add(`page:${id}`, `/api/pages/${id}`, data, `заметка ${quoted(pageById(id)?.title, 'без названия')}`);
+    setSaveState(Unsaved.label());
   }
 }
 function queuePageSave(data) {
@@ -1411,7 +1610,15 @@ function presealPage() {
   const untitled = !pageById(S.page.id)?.title.trim();
   preseal(d.title, d.content, untitled ? firstLine(S.page.content || '') : '');
 }
-function setSaveState(t) { const el = $('#save-state'); if (el) { el.textContent = t; el.classList.toggle('unsaved', t === 'Не сохранено'); } }
+// На узком телефоне в шапке мало места: «Сохранено на устройстве» → «На устройстве»
+const shortSave = (t) => (t === 'Сохранено на устройстве' && matchMedia('(max-width: 600px)').matches ? 'На устройстве' : t);
+function setSaveState(t) {
+  const el = $('#save-state');
+  if (!el) return;
+  el.textContent = shortSave(t);
+  el.classList.toggle('unsaved', t === 'Не сохранено');
+  el.classList.toggle('local', t === 'Сохранено на устройстве');
+}
 
 // Заметка без названия не сохраняется: при уходе с неё название берётся из первой строки текста,
 // а совсем пустая удаляется. Текст зашифрован, поэтому первую строку находит браузер.
@@ -1439,12 +1646,24 @@ window.addEventListener('beforeunload', () => {
   if (S.page && !pageById(S.page.id)?.title.trim()) sendNow('POST', `/api/pages/${S.page.id}/finalize`, { ...data, ...finalizeBody(S.page.content) });
   else if (pendingSave) sendNow('PATCH', `/api/pages/${pendingSave.id}`, data);
 });
-// Есть несохранённое — последняя попытка отправить и предупреждение браузера «Покинуть сайт?»
+// Есть неотправленное — последняя попытка отправить. Предупреждение браузера «Покинуть сайт?» — только если
+// правки могут пропасть: на устройство записать не удаётся или последние буквы ещё не попали в очередь без связи
 window.addEventListener('beforeunload', (e) => {
-  if (!Unsaved.items.size) return;
   Unsaved.items.forEach((it) => sendNow('PATCH', it.url, it.data));
-  e.preventDefault();
-  e.returnValue = '';
+  const offline = !navigator.onLine || Unsaved.items.size;
+  if ((Unsaved.items.size && !Unsaved.stored) || (offline && (pendingSave || $('.panel')?.dirtyFn?.()))) {
+    flushPageSave();
+    $('.panel')?.flushFn?.();
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+// Телефон: свернули Silo или переключились на другое приложение — сразу сохраняем напечатанное
+// (без связи оно попадёт в очередь на устройстве, а не останется только в памяти вкладки)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'hidden' || !S.user) return;
+  flushPageSave();
+  $('.panel')?.flushFn?.();
 });
 function sendNow(method, url, body) {
   const sealed = Vault.ready() ? sealNow(body) : body;
@@ -2842,8 +3061,10 @@ function openTaskPanel(id, { justCreated = false } = {}) {
       const ok = await run();
       if (!ok) { saveFailed = true; anyFailed = true; }
       if (--saving === 0) {
-        saveEl.textContent = saveFailed ? 'Не сохранено' : 'Сохранено';
-        saveEl.classList.toggle('unsaved', saveFailed);
+        const label = saveFailed ? Unsaved.label() : 'Сохранено';
+        saveEl.textContent = shortSave(label);
+        saveEl.classList.toggle('unsaved', label === 'Не сохранено');
+        saveEl.classList.toggle('local', label === 'Сохранено на устройстве');
         saveFailed = false;
       }
       return ok;
@@ -2982,6 +3203,9 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   };
   const saveDesc = debounce(saveDescNow, 700);
   saveDesc.flush = () => { saveDesc.cancel(); saveDescNow(); };
+  // свернули Silo / закрывают вкладку без связи — напечатанное сразу в очередь (см. visibilitychange)
+  panel.flushFn = () => { if (title.value.trim() && title.value.trim() !== t.title) saveTitleNow(); saveDesc.flush(); };
+  panel.dirtyFn = () => descDirty || (!!title.value.trim() && title.value.trim() !== t.title);
   // шифр для запроса при закрытии вкладки готовим заранее (см. preseal)
   const presealDesc = () => { const h = serializeEditor(desc); preseal(h, firstLine(h)); };
   $('#tp-toolbar', panel).replaceWith(makeEditor(desc, () => { descDirty = true; markDirty(); saveDesc(); presealDesc(); }));
@@ -3329,16 +3553,27 @@ function openUserMenu(anchor) {
     if (m === 'users') openUsersDialog();
     if (m === 'logout') {
       await flushPageSave();
+      if (Unsaved.items.size) await Unsaved.retry(true);
+      if (Unsaved.items.size) {
+        const n = Unsaved.items.size;
+        const ok = await confirmDialog({
+          title: 'Есть неотправленные изменения',
+          text: `${n} ${plural(n, 'изменение', 'изменения', 'изменений')} пока только на этом устройстве — нет связи с сервером. Если выйти из аккаунта, ${n === 1 ? 'оно пропадёт' : 'они пропадут'}.`,
+          okText: 'Выйти всё равно', danger: true,
+        });
+        if (!ok) return;
+      }
       if (S.page) await finalizePage(S.page.id);
       // после выхода напоминания на это устройство не приходят; подписка браузера остаётся — при следующем входе
       // она привяжется к тому, кто вошёл
       const sub = await Push.subscription().catch(() => null);
       if (sub) await api('POST', '/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
       await api('POST', '/api/logout').catch(() => {});
+      Unsaved.clear(S.user.id);
+      await Unsaved.chain;
       await Vault.forget(S.user.id);
       S.user = null;
       S.page = null;
-      Unsaved.clear();
       history.replaceState(null, '', '/');
       renderAuth();
     }
