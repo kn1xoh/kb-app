@@ -2559,7 +2559,7 @@ function openRemindMenu(anchor, t, onSet) {
         if (at <= new Date()) return toast('Это время уже прошло — выберите время позже', 'error');
         Push.ensure();
         onSet({ remind_at: at.toISOString(), remind_before: null });
-      }, { withTime: true, needTime: true, time: d ? d.toTimeString().slice(0, 5) : '09:00', clearLabel: 'Не напоминать', label: 'Время напоминания' });
+      }, { withTime: true, needTime: true, time: d ? d.toTimeString().slice(0, 5) : '09:00', clearLabel: 'Не напоминать', label: 'Время напоминания', live: false });
     }
     const o = opts[Number(m)];
     Push.ensure(); // разрешение на уведомления спрашиваем прямо по нажатию — иначе iPhone не покажет запрос
@@ -2946,8 +2946,10 @@ function showMenu(anchor, html, onPick) {
     if (!b.dataset.keep) closeMenus();
     onPick(b.dataset.m, b);
   });
-  setTimeout(() => document.addEventListener('mousedown', outside), 0);
-  function outside(e) { if (!menu.contains(e.target)) { closeMenus(); document.removeEventListener('mousedown', outside); } }
+  setTimeout(() => menu.isConnected && document.addEventListener('mousedown', outside), 0);
+  function outside(e) { if (!menu.contains(e.target)) closeMenus(); }
+  // при закрытии меню снимаем и слушатель — иначе он закрывал бы окно, открытое из этого меню (календарь напоминания)
+  menu.cleanup = () => { menu.remove(); document.removeEventListener('mousedown', outside); };
   $('button', menu)?.focus();
   return menu;
 }
@@ -2959,6 +2961,10 @@ function closeMenus() { $$('.menu').forEach((m) => (m.cleanup ? m.cleanup() : m.
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 function openDatePicker(anchor, value, onPick, opts = {}) {
   const { withTime = false, needTime = false, clearLabel = 'Убрать срок', label = 'Выбор срока' } = opts;
+  // со временем календарь не закрывается при выборе даты — закрывает кнопка «Готово» (или Enter в поле времени).
+  // live: дата и время сохраняются сразу (срок задачи); иначе — только по «Готово» (напоминание)
+  const stay = withTime;
+  const live = opts.live ?? true;
   let time = opts.time || null;
   closeMenus();
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -2973,7 +2979,6 @@ function openDatePicker(anchor, value, onPick, opts = {}) {
   const base = value ? new Date(value + 'T00:00') : today;
   let year = base.getFullYear(), month = base.getMonth();
   let focusDay = value || tStr;
-  let pressedInside = false;
 
   const box = document.createElement('div');
   box.className = 'menu datepicker';
@@ -2986,6 +2991,23 @@ function openDatePicker(anchor, value, onPick, opts = {}) {
     if (tv) time = tv;
     cleanup();
     onPick(v, v ? time : null);
+  };
+  const finish = () => {
+    const tv = $('#dp-time-in', box)?.value;
+    if (tv && tv !== time) { time = tv; if (live && value) onPick(value, time); }
+    cleanup();
+    anchor.focus({ preventScroll: true });
+    if (!live && value) onPick(value, time);
+  };
+  const pickDay = (d) => {
+    if (!stay) return done(d);
+    value = d; focusDay = d;
+    const dt = new Date(d + 'T00:00');
+    year = dt.getFullYear(); month = dt.getMonth();
+    if (live) onPick(value, time);
+    render();
+    place(); // появилась строка «Убрать срок» — окно стало выше
+    $(`.dp-day[data-d="${d}"]`, box)?.focus({ preventScroll: true });
   };
   function render() {
     const first = new Date(year, month, 1);
@@ -3008,36 +3030,30 @@ function openDatePicker(anchor, value, onPick, opts = {}) {
       ${withTime ? `<div class="dp-time">${icon('clock')}<label for="dp-time-in">Время</label>
         <input type="time" id="dp-time-in" class="input" value="${time || ''}" ${needTime ? 'required' : ''}>
         ${time && !needTime ? `<button type="button" class="icon-btn dp-time-x" data-notime title="Без времени" aria-label="Без времени">${icon('x')}</button>` : ''}</div>` : ''}
-      ${value ? `<button type="button" class="dp-clear" data-clear>${icon('x')}${clearLabel}</button>` : ''}`;
+      ${stay ? `<div class="dp-foot"><button type="button" class="btn primary dp-done" data-done>Готово</button>
+        ${value ? `<button type="button" class="dp-clear" data-clear>${icon('x')}${clearLabel}</button>` : ''}</div>`
+        : value ? `<button type="button" class="dp-clear" data-clear>${icon('x')}${clearLabel}</button>` : ''}`;
     const ti = $('#dp-time-in', box);
     if (!ti) return;
-    // время сохраняется сразу; когда поле времени теряет фокус (на iPhone — «Готово» над колесом, на ПК — Enter
-    // или клик мимо) и дата уже выбрана — календарь закрывается
+    // время меняется на месте: если дата уже выбрана — сохраняем сразу (в режиме live), календарь остаётся открытым
     const setTime = (v) => {
       if ((v || null) === time || (needTime && !v)) return;
       time = v || null;
-      if (value) onPick(value, time);
+      if (live && value) onPick(value, time);
       const x = $('[data-notime]', box);
       if (!time && x) x.remove();
       else if (time && !x && !needTime) {
         ti.insertAdjacentHTML('afterend', `<button type="button" class="icon-btn dp-time-x" data-notime title="Без времени" aria-label="Без времени">${icon('x')}</button>`);
       }
     };
-    const finish = () => { setTime(ti.value); if (value && box.isConnected) { cleanup(); anchor.focus({ preventScroll: true }); } };
     ti.addEventListener('change', () => setTime(ti.value));
-    ti.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); finish(); } });
-    ti.addEventListener('blur', (e) => {
-      // нажали внутри календаря (день, стрелки, «Без времени») — эта кнопка сама решит, закрывать ли
-      // (в Safari кнопки фокус не получают, поэтому смотрим и на relatedTarget, и на нажатие)
-      if (pressedInside || (e.relatedTarget && box.contains(e.relatedTarget))) return;
-      if (ti.value || !time) finish();
-    });
+    ti.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); setTime(ti.value); if (value) finish(); } });
   }
   function place() {
     const r = anchor.getBoundingClientRect();
     const w = box.offsetWidth, h = box.offsetHeight;
     let top = r.bottom + 4;
-    if (top + h > innerHeight - 8) top = Math.max(8, r.top - h - 4);
+    if (top + h > innerHeight - 8) top = r.top - h - 4 >= 8 ? r.top - h - 4 : Math.max(8, innerHeight - h - 8);
     box.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px';
     box.style.top = top + 'px';
   }
@@ -3061,17 +3077,17 @@ function openDatePicker(anchor, value, onPick, opts = {}) {
       return;
     }
     if (e.target.closest('[data-clear]')) return done(null);
+    if (e.target.closest('[data-done]')) return finish();
     if (e.target.closest('[data-notime]')) {
       time = null;
-      if (value) onPick(value, null);
+      if (live && value) onPick(value, null);
       render();
       $('#dp-time-in', box)?.focus();
       return;
     }
     const day = e.target.closest('[data-d]');
-    if (day) done(day.dataset.d);
+    if (day) pickDay(day.dataset.d);
   });
-  box.addEventListener('pointerdown', (e) => { if (e.target.id === 'dp-time-in') return; pressedInside = true; setTimeout(() => { pressedInside = false; }, 600); });
   box.addEventListener('keydown', (e) => {
     if (!e.target.classList.contains('dp-day')) return;
     const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
