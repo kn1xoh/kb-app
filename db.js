@@ -259,7 +259,30 @@ db.init = async () => {
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  -- Подписки на уведомления: одна строка — одно устройство (браузер) пользователя.
+  -- origin — адрес сайта, с которого подписались (нужен службе уведомлений Apple как контакт отправителя)
+  CREATE TABLE IF NOT EXISTS push_subs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_push_user ON push_subs(user_id);
   `);
+
+  // Срок со временем и напоминания. Только новые поля — существующие данные не меняются.
+  // due_time — 'ЧЧ:ММ' по времени пользователя (NULL — срок на весь день);
+  // remind_at — когда напомнить, UTC в формате datetime('now'); remind_before — за сколько минут до срока
+  // (NULL — пользователь выбрал своё время); reminded_at — когда напоминание отправлено
+  await addColumn('tasks', 'due_time', 'TEXT');
+  await addColumn('tasks', 'remind_at', 'TEXT');
+  await addColumn('tasks', 'remind_before', 'INTEGER');
+  await addColumn('tasks', 'reminded_at', 'TEXT');
+  await db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_remind ON tasks(remind_at) WHERE reminded_at IS NULL AND remind_at IS NOT NULL');
 
   await db.run('DELETE FROM sessions WHERE expires_at < ?', Date.now());
 };

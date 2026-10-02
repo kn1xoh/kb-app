@@ -1103,3 +1103,51 @@ body:has(.bulk-bar) #toasts { bottom: calc(84px + env(safe-area-inset-bottom, 0p
 .pass-eye, .pass-eye:hover { background: none; width: 34px; height: 34px; }
 .pass-eye:hover { color: var(--fg); }
 .pass-eye[aria-pressed="true"] { color: var(--accent); }
+
+/* ---------- время срока и напоминания ---------- */
+.due-pair { display: flex; gap: 6px; max-width: 240px; min-width: 0; }
+.due-pair .date-btn { flex: 1; min-width: 0; }
+.due-pair .date-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.due-pair .time-btn { flex: 0 0 auto; width: auto; font-variant-numeric: tabular-nums; }
+.due-pair .time-btn[hidden] { display: none; }
+.date-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.date-btn.past { color: var(--muted); }
+.props .date-btn { font-variant-numeric: tabular-nums; }
+
+/* строка «Время» внизу календаря */
+.dp-time { display: flex; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+.dp-time svg.i { width: 16px; height: 16px; flex: none; }
+.dp-time label { flex: 1; }
+.dp-time input { width: 112px; height: 34px; padding: 0 8px; font-variant-numeric: tabular-nums; }
+.datepicker .dp-time-x { width: 30px; height: 30px; flex: none; }
+.datepicker .dp-time-x svg.i { width: 14px; height: 14px; }
+
+/* отдельный выбор времени */
+.timepicker { width: 236px; min-width: 0; padding: 10px; display: grid; gap: 8px; }
+.tm-row { display: flex; gap: 6px; }
+.tm-row input { flex: 1; min-width: 0; height: 34px; padding: 0 8px; font-variant-numeric: tabular-nums; }
+.timepicker .tm-row .btn { width: auto; height: 34px; padding: 0 12px; }
+.tm-quick { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+.timepicker .tm-quick button { justify-content: center; padding: 6px 0; border: 1px solid var(--line); border-radius: 7px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.timepicker .tm-quick button.on { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.timepicker .dp-clear { gap: 8px; color: var(--muted); border-top: 1px solid var(--line); border-radius: 0 0 6px 6px; padding: 8px 10px; }
+.timepicker .dp-clear svg.i { width: 16px; height: 16px; }
+
+/* меню напоминания: вариант слева, точное время справа */
+.remind-menu { min-width: 260px; }
+.remind-menu button span { flex: 1; }
+.remind-menu button small { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.remind-menu button.on { background: var(--accent-soft); color: var(--accent); }
+.remind-menu svg.i { width: 16px; height: 16px; color: var(--muted); flex: none; }
+.remind-menu button.on svg.i { color: var(--accent); }
+
+/* колокольчик у задачи в списке и на доске */
+.t-meta .remind { display: inline-flex; color: var(--faint); }
+.t-meta .remind svg.i { width: 13px; height: 13px; }
+
+@media (max-width: 860px), (pointer: coarse) {
+  .dp-time input, .tm-row input, .timepicker .tm-row .btn { height: var(--tap); }
+  .datepicker .dp-time-x { width: var(--tap); height: var(--tap); }
+  .timepicker .tm-quick button { padding: 10px 0; }
+  .timepicker { width: 264px; }
+}

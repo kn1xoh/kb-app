@@ -17,6 +17,9 @@ const STATUS_COLORS = {
 // Статусы задач пользователя (S.statuses). todo — встроенный: в него уходят задачи удалённого статуса
 const statusOf = (key) => S.statuses.find((s) => s.key === key) || { key, name: 'Без статуса', color: 'gray' };
 const statusColor = (key) => `var(--st-${statusOf(key).color})`;
+// Где выбирается время срока: 'picker' — строка «Время» внизу календаря, 'button' — отдельная кнопка рядом с датой
+// (временно для сравнения вариантов: localStorage['kb-time-ui'])
+const TIME_UI = (() => { try { return JSON.parse(localStorage.getItem('kb-time-ui')) || 'picker'; } catch { return 'picker'; } })();
 const PRIORITY = { high: 'Высокий', medium: 'Средний', low: 'Низкий' };
 
 // ---------- icons ----------
@@ -65,6 +68,8 @@ const ICONS = {
   filter: 'M4 7h16M7 12h10M10 17h4',
   eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
   eyeOff: 'M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2',
+  bell: 'M6 8.5a6 6 0 0 1 12 0c0 6.5 2.5 8.5 2.5 8.5h-17S6 15 6 8.5zM10 20.5a2.2 2.2 0 0 0 4 0',
+  clock: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7.5V12l3 2',
   star: 'M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.75 1-5.8L3.5 9.7l5.9-.9z',
 };
 // Логотип Silo: вид сверху в шахту силоса — стена и винтовая лестница, уходящая вглубь
@@ -121,6 +126,10 @@ function dueLong(d) {
   if (['сегодня', 'завтра', 'вчера'].includes(rel)) return `${rel[0].toUpperCase()}${rel.slice(1)}, ${date}`;
   return `${dt.toLocaleDateString('ru-RU', { weekday: 'short' })}, ${date}`;
 }
+// Срок со временем: due_time — 'ЧЧ:ММ' по местному времени или null (срок на весь день)
+const dueAt = (t) => (t.due_date ? new Date(`${t.due_date}T${t.due_time || '00:00'}`) : null);
+const isOverdue = (t) => !!t.due_date && (t.due_time ? dueAt(t) < new Date() : t.due_date < todayStr());
+const withTime = (label, time) => (time ? `${label}, ${time}` : label);
 const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 
@@ -544,7 +553,13 @@ async function startApp() {
   if (!location.hash) location.hash = '#/notes';
   else route();
   fixUntitled();
+  Push.register();
+  Push.sync();
 }
+// Нажали на уведомление, а Silo уже открыт — sw.js просит открыть задачу
+navigator.serviceWorker?.addEventListener('message', (e) => {
+  if (S.user && e.data?.openTask) location.hash = `#/tasks/${Number(e.data.openTask)}`;
+});
 
 // Открытый текст, который ещё лежит на сервере (старый аккаунт, приветственные заметки), — шифруем
 async function encryptLeftovers() {
@@ -662,6 +677,11 @@ async function route() {
   S.taskSelect = false;
   S.taskSelected.clear();
   if (section === 'tasks') {
+    // #/tasks/ID — ссылка из уведомления: открываем задачу, адрес возвращаем к разделу
+    if (id) {
+      S.openTaskAfterRoute = Number(id);
+      history.replaceState(null, '', '#/tasks');
+    }
     renderTasks();
     // задачу из поиска открываем, когда раздел уже на экране (уход с заметки может занять время)
     const open = S.openTaskAfterRoute;
@@ -1989,7 +2009,7 @@ const taskById = (id) => S.tasks.find((t) => t.id === id);
 const DUE_FILTERS = [
   { id: 'all', title: 'Любой срок', test: () => true },
   { id: 'today', title: 'На сегодня', test: (t) => t.due_date && t.due_date <= todayStr() },
-  { id: 'overdue', title: 'Просроченные', test: (t) => t.due_date && t.due_date < todayStr() },
+  { id: 'overdue', title: 'Просроченные', test: isOverdue },
 ];
 const tf = () => {
   const f = S.taskFilter;
@@ -2201,9 +2221,10 @@ function taskMeta(t) {
   if (isDone(t)) return `<span class="t-meta"><span class="done-at">${icon('check')}${ago(t.completed_at)}</span></span>`;
   const parts = [];
   if (t.due_date) {
-    const cls = t.due_date < todayStr() ? 'overdue' : t.due_date === todayStr() ? 'today' : '';
-    parts.push(`<span class="due ${cls}">${icon('calendar')}${dueLabel(t.due_date)}</span>`);
+    const cls = isOverdue(t) ? 'overdue' : t.due_date === todayStr() ? 'today' : '';
+    parts.push(`<span class="due ${cls}">${icon('calendar')}${withTime(dueLabel(t.due_date), t.due_time)}</span>`);
   }
+  if (remindPending(t)) parts.push(`<span class="remind" title="Напоминание: ${esc(remindWhen(t))}">${icon('bell')}</span>`);
   parts.push(`<span class="prio ${t.priority}">${PRIORITY[t.priority]}</span>`);
   return `<span class="t-meta">${parts.join('')}</span>`;
 }
@@ -2397,6 +2418,153 @@ async function restoreTasks(ids, { undo = false } = {}) {
   } catch (e) { fail(e); }
 }
 
+/* ---------- уведомления на этом устройстве ---------- */
+// Подписка — у каждого браузера своя. Сервер шлёт напоминание через службу уведомлений браузера,
+// а sw.js показывает его, даже когда Silo закрыт. На iPhone это работает только в приложении с экрана «Домой».
+const Push = {
+  isIos: () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1),
+  standalone: () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true,
+  supported: () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window,
+  // Почему уведомления недоступны (или '' — доступны)
+  problem() {
+    if (!this.supported()) {
+      if (this.isIos() && !this.standalone()) return 'На iPhone уведомления приходят только в приложении: в Safari нажмите «Поделиться» → «На экран Домой» и откройте Silo оттуда.';
+      return 'Этот браузер не умеет показывать уведомления.';
+    }
+    if (Notification.permission === 'denied') return 'Уведомления для Silo запрещены в настройках браузера. Разрешите их там и включите снова.';
+    return '';
+  },
+  register() {
+    if (!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  },
+  async subscription() {
+    if (!this.supported()) return null;
+    const reg = await navigator.serviceWorker.getRegistration();
+    return reg ? reg.pushManager.getSubscription() : null;
+  },
+  async on() { return Notification.permission === 'granted' && !!(await this.subscription()); },
+  // Включить: спросить разрешение (должно идти сразу по нажатию), подписаться, отправить подписку на сервер
+  async enable() {
+    if (this.problem()) throw new Error(this.problem());
+    const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+    if (perm !== 'granted') throw new Error(perm === 'denied' ? this.problem() : 'Вы не разрешили уведомления');
+    this.register();
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { publicKey } = await api('GET', '/api/push/key');
+      const key = Uint8Array.from(atob(publicKey.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+      // если служба уведомлений браузера недоступна (сеть, VPN), подписка может зависнуть — ждём не дольше 20 с
+      sub = await Promise.race([
+        reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key }),
+        new Promise((_, no) => setTimeout(() => no(new Error('Служба уведомлений браузера не отвечает. Проверьте интернет и попробуйте ещё раз')), 20000)),
+      ]);
+    }
+    await api('POST', '/api/push/subscribe', sub.toJSON());
+    return sub;
+  },
+  async disable() {
+    const sub = await this.subscription();
+    if (!sub) return;
+    await api('POST', '/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
+    await sub.unsubscribe().catch(() => {});
+  },
+  // При установке напоминания: если уведомления на этом устройстве ещё не включены — включаем,
+  // а если нельзя — объясняем, почему напоминание не придёт сюда
+  ensure() {
+    if (this.supported() && Notification.permission === 'granted') {
+      this.subscription().then((s) => s || this.enable()).catch(() => {});
+      return;
+    }
+    const why = this.problem();
+    if (why) { toast(`Напоминание сохранено, но на это устройство не придёт. ${why}`, 'error'); return; }
+    this.enable()
+      .then(() => toast('Уведомления включены — напоминание придёт на это устройство'))
+      .catch((e) => toast(`Напоминание сохранено, но уведомления не включены. ${e.message}`, 'error'));
+  },
+  // После входа: подписка этого устройства (если есть) привязывается к вошедшему пользователю
+  async sync() {
+    try {
+      if (!(await this.on())) return;
+      await api('POST', '/api/push/subscribe', (await this.subscription()).toJSON());
+    } catch { /* не страшно — повторим при следующем входе */ }
+  },
+};
+
+/* ---------- напоминания ---------- */
+// remind_at — UTC (из базы 'ГГГГ-ММ-ДД ЧЧ:ММ:СС', после правки — ISO), remind_before — минут до срока
+// (у срока без времени отсчёт от начала дня: −540 — «в день срока, 9:00», 900 — «накануне, 9:00»)
+const REMIND_PRESETS = [
+  { before: 0, label: 'В момент срока', timed: true },
+  { before: 15, label: 'За 15 минут', timed: true },
+  { before: 60, label: 'За 1 час', timed: true },
+  { before: 1440, label: 'За 1 день', timed: true },
+  { before: -540, label: 'В день срока, 9:00', timed: false },
+  { before: 900, label: 'Накануне, 9:00', timed: false },
+];
+const parseUtc = (s) => new Date(/[zZ]|[+-]\d\d:\d\d$/.test(s) ? s : s.replace(' ', 'T') + 'Z');
+const remindDate = (t) => (t.remind_at ? parseUtc(t.remind_at) : null);
+const remindPending = (t) => !!t.remind_at && !isDone(t) && remindDate(t) > new Date();
+const presetOf = (t) => (t.remind_before == null ? null
+  : REMIND_PRESETS.find((p) => p.before === t.remind_before && p.timed === !!t.due_time) || null);
+const remindFrom = (t, before) => new Date(dueAt(t).getTime() - before * 60e3);
+// «Сегодня, 2 окт, 14:30»
+const remindWhen = (t) => { const d = remindDate(t); return d ? withTime(dueLong(ymd(d)), d.toTimeString().slice(0, 5)) : ''; };
+const remindLabel = (t) => presetOf(t)?.label || remindWhen(t);
+
+// Срок изменился: напоминание «за N до срока» переезжает вместе со сроком; если вариант к новому сроку
+// не подходит (убрали срок или время) — остаётся в прежнее время
+function duePatch(t, date, time) {
+  const patch = { due_date: date || null, due_time: date ? time || null : null };
+  if (t.remind_at && t.remind_before != null) {
+    const p = presetOf(t);
+    const next = { ...t, ...patch };
+    if (p && next.due_date && p.timed === !!next.due_time) Object.assign(patch, { remind_at: remindFrom(next, p.before).toISOString(), remind_before: p.before });
+    else { patch.remind_at = remindDate(t).toISOString(); patch.remind_before = null; }
+  }
+  return patch;
+}
+
+function openRemindMenu(anchor, t, onSet) {
+  const now = new Date();
+  const opts = [];
+  if (t.due_date) {
+    for (const p of REMIND_PRESETS) {
+      if (p.timed !== !!t.due_time) continue;
+      const at = remindFrom(t, p.before);
+      if (at > now) opts.push({ label: p.label, at, before: p.before });
+    }
+  }
+  if (!opts.length) {
+    const evening = new Date(); evening.setHours(18, 0, 0, 0);
+    const morning = addDays(new Date(), 1); morning.setHours(9, 0, 0, 0);
+    if (evening - now > 15 * 60e3) opts.push({ label: 'Сегодня, 18:00', at: evening });
+    opts.push({ label: 'Завтра, 9:00', at: morning });
+  }
+  const cur = remindDate(t)?.getTime();
+  const item = (o, i) => `<button data-m="${i}" class="${cur === o.at.getTime() ? 'on' : ''}">${icon('bell')}<span>${o.label}</span>
+    <small>${esc(withTime(dueLong(ymd(o.at)), o.at.toTimeString().slice(0, 5)))}</small></button>`;
+  showMenu(anchor, `<div class="remind-menu">${opts.map(item).join('')}
+    <button data-m="custom">${icon('calendar')}<span>Выбрать дату и время…</span></button>
+    ${t.remind_at ? `<hr><button data-m="off">${icon('x')}<span>Не напоминать</span></button>` : ''}</div>`, (m) => {
+    if (m === 'off') return onSet({ remind_at: null });
+    if (m === 'custom') {
+      const d = remindDate(t) || (t.due_date ? dueAt(t) : null);
+      return openDatePicker(anchor, d ? ymd(d) : null, (date, time) => {
+        if (!date) return onSet({ remind_at: null });
+        const at = new Date(`${date}T${time || '09:00'}`);
+        if (at <= new Date()) return toast('Это время уже прошло — выберите время позже', 'error');
+        Push.ensure();
+        onSet({ remind_at: at.toISOString(), remind_before: null });
+      }, { withTime: true, needTime: true, time: d ? d.toTimeString().slice(0, 5) : '09:00', clearLabel: 'Не напоминать', label: 'Время напоминания' });
+    }
+    const o = opts[Number(m)];
+    Push.ensure(); // разрешение на уведомления спрашиваем прямо по нажатию — иначе iPhone не покажет запрос
+    onSet({ remind_at: o.at.toISOString(), remind_before: o.before ?? null });
+  });
+}
+
 async function updateTask(t, patch) {
   Object.assign(t, patch);
   refreshTasks();
@@ -2490,7 +2658,9 @@ function openTaskPanel(id, { justCreated = false } = {}) {
         <span>Приоритет</span>
         <select id="tp-prio">${Object.entries(PRIORITY).map(([k, v]) => `<option value="${k}" ${t.priority === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
         <span>Срок</span>
-        <button type="button" class="date-btn" id="tp-due"></button>
+        <span class="due-pair"><button type="button" class="date-btn" id="tp-due"></button>${TIME_UI === 'button' ? '<button type="button" class="date-btn time-btn" id="tp-time"></button>' : ''}</span>
+        <span>Напомнить</span>
+        <button type="button" class="date-btn" id="tp-remind"></button>
         <span>Создана</span>
         <span class="prop-text" title="${esc(ago(t.created_at))}">${esc(fullDateTime(t.created_at))}</span>
       </div>
@@ -2600,17 +2770,34 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   if (statusSel) statusSel.onchange = (e) => update({ status: e.target.value });
   $('#tp-prio', panel).onchange = (e) => update({ priority: e.target.value });
   const dueBtn = $('#tp-due', panel);
+  const timeBtn = $('#tp-time', panel);
+  const remindBtn = $('#tp-remind', panel);
   const paintDue = () => {
-    const overdue = t.due_date && !isDone(t) && t.due_date < todayStr();
+    const overdue = !isDone(t) && isOverdue(t);
+    const inPicker = TIME_UI !== 'button';
     dueBtn.className = `date-btn ${t.due_date ? '' : 'no-date'} ${overdue ? 'overdue' : ''}`;
-    dueBtn.innerHTML = `${icon('calendar')}<span>${t.due_date ? dueLong(t.due_date) : 'Без срока'}</span>`;
+    dueBtn.innerHTML = `${icon('calendar')}<span>${t.due_date ? (inPicker ? withTime(dueLong(t.due_date), t.due_time) : dueLong(t.due_date)) : 'Без срока'}</span>`;
+    if (timeBtn) {
+      timeBtn.hidden = !t.due_date;
+      timeBtn.className = `date-btn time-btn ${t.due_time ? '' : 'no-date'} ${overdue ? 'overdue' : ''}`;
+      timeBtn.innerHTML = t.due_time ? `${icon('clock')}<span>${t.due_time}</span>` : `${icon('clock')}<span>Время</span>`;
+      timeBtn.title = t.due_time ? 'Изменить время' : 'Добавить время';
+    }
+    const pending = remindPending(t);
+    remindBtn.className = `date-btn ${t.remind_at ? '' : 'no-date'} ${t.remind_at && !pending ? 'past' : ''}`;
+    remindBtn.innerHTML = `${icon('bell')}<span>${t.remind_at ? esc(remindLabel(t)) : 'Не напоминать'}</span>`;
+    remindBtn.title = t.remind_at ? `${pending ? 'Напомню' : 'Напоминание было'}: ${remindWhen(t)}` : '';
   };
   paintDue();
-  dueBtn.onclick = () => openDatePicker(dueBtn, t.due_date, async (v) => {
-    if (v === (t.due_date || null)) return;
-    await update({ due_date: v });
+  const setDue = async (date, time) => {
+    if (date === (t.due_date || null) && (time || null) === (t.due_time || null)) return;
+    await update(duePatch(t, date, time));
     paintDue();
-  });
+  };
+  dueBtn.onclick = () => openDatePicker(dueBtn, t.due_date, (d, tm) => setDue(d, TIME_UI === 'button' ? (d ? t.due_time : null) : tm),
+    { withTime: TIME_UI !== 'button', time: t.due_time });
+  if (timeBtn) timeBtn.onclick = () => openTimePicker(timeBtn, t.due_time, (tm) => setDue(t.due_date, tm));
+  remindBtn.onclick = () => openRemindMenu(remindBtn, t, async (patch) => { await update(patch); paintDue(); });
 
   const desc = $('#tp-desc', panel);
   let descDirty = false;
@@ -2773,9 +2960,14 @@ function showMenu(anchor, html, onPick) {
   return menu;
 }
 function closeMenus() { $$('.menu').forEach((m) => (m.cleanup ? m.cleanup() : m.remove())); }
-// Свой выбор даты: быстрые варианты + календарь. onPick получает 'ГГГГ-ММ-ДД' или null (без срока)
+// Свой выбор даты: быстрые варианты + календарь. onPick(дата, время): дата 'ГГГГ-ММ-ДД' или null (без срока).
+// opts.withTime — внизу строка «Время» (время 'ЧЧ:ММ' или null); изменение времени при выбранной дате
+// сохраняется сразу, календарь не закрывается. opts.needTime — без времени нельзя (напоминание);
+// opts.clearLabel — подпись кнопки «Убрать …»; opts.label — подпись окна для экранного диктора
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
-function openDatePicker(anchor, value, onPick) {
+function openDatePicker(anchor, value, onPick, opts = {}) {
+  const { withTime = false, needTime = false, clearLabel = 'Убрать срок', label = 'Выбор срока' } = opts;
+  let time = opts.time || null;
   closeMenus();
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const tStr = ymd(today);
@@ -2793,10 +2985,15 @@ function openDatePicker(anchor, value, onPick) {
   const box = document.createElement('div');
   box.className = 'menu datepicker';
   box.setAttribute('role', 'dialog');
-  box.setAttribute('aria-label', 'Выбор срока');
+  box.setAttribute('aria-label', label);
   document.body.append(box);
 
-  const done = (v) => { cleanup(); onPick(v); };
+  const done = (v) => {
+    const tv = $('#dp-time-in', box)?.value;
+    if (tv) time = tv;
+    cleanup();
+    onPick(v, v ? time : null);
+  };
   function render() {
     const first = new Date(year, month, 1);
     const start = addDays(first, -((first.getDay() + 6) % 7));
@@ -2815,7 +3012,23 @@ function openDatePicker(anchor, value, onPick) {
         <button type="button" class="icon-btn dp-nav" data-nav="1" aria-label="Следующий месяц">${icon('chevron')}</button>
       </div>
       <div class="dp-grid">${['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((w) => `<span class="dp-wd">${w}</span>`).join('')}${cells}</div>
-      ${value ? '<button type="button" class="dp-clear" data-clear>' + icon('x') + 'Убрать срок</button>' : ''}`;
+      ${withTime ? `<div class="dp-time">${icon('clock')}<label for="dp-time-in">Время</label>
+        <input type="time" id="dp-time-in" class="input" value="${time || ''}" ${needTime ? 'required' : ''}>
+        ${time && !needTime ? `<button type="button" class="icon-btn dp-time-x" data-notime title="Без времени" aria-label="Без времени">${icon('x')}</button>` : ''}</div>` : ''}
+      ${value ? `<button type="button" class="dp-clear" data-clear>${icon('x')}${clearLabel}</button>` : ''}`;
+    const ti = $('#dp-time-in', box);
+    if (!ti) return;
+    // время меняется на месте: если дата уже выбрана — сохраняем сразу, календарь остаётся открытым
+    const setTime = (v) => {
+      if ((v || null) === time || (needTime && !v)) return;
+      time = v || null;
+      if (value) onPick(value, time);
+      const x = $('[data-notime]', box);
+      if (!time && x) x.remove();
+      else if (time && !x && !needTime) render(), $('#dp-time-in', box).focus();
+    };
+    ti.addEventListener('change', () => setTime(ti.value));
+    ti.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); setTime(ti.value); if (value) done(value); } });
   }
   function place() {
     const r = anchor.getBoundingClientRect();
@@ -2845,6 +3058,13 @@ function openDatePicker(anchor, value, onPick) {
       return;
     }
     if (e.target.closest('[data-clear]')) return done(null);
+    if (e.target.closest('[data-notime]')) {
+      time = null;
+      if (value) onPick(value, null);
+      render();
+      $('#dp-time-in', box)?.focus();
+      return;
+    }
     const day = e.target.closest('[data-d]');
     if (day) done(day.dataset.d);
   });
@@ -2872,6 +3092,47 @@ function openDatePicker(anchor, value, onPick) {
   focusCell();
 }
 
+// Выбор времени отдельно от даты: поле времени + частые варианты. onPick получает 'ЧЧ:ММ' или null (без времени)
+const TIME_QUICK = ['09:00', '12:00', '15:00', '18:00', '21:00'];
+function openTimePicker(anchor, value, onPick) {
+  closeMenus();
+  const box = document.createElement('div');
+  box.className = 'menu timepicker';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-label', 'Время срока');
+  box.innerHTML = `
+    <div class="tm-row"><input type="time" class="input" id="tm-in" value="${value || ''}" aria-label="Время">
+      <button type="button" class="btn primary" data-ok>Готово</button></div>
+    <div class="tm-quick">${TIME_QUICK.map((t) => `<button type="button" data-t="${t}" class="${t === value ? 'on' : ''}">${t}</button>`).join('')}</div>
+    ${value ? `<button type="button" class="dp-clear" data-t="">${icon('x')}Без времени</button>` : ''}`;
+  document.body.append(box);
+  const input = $('#tm-in', box);
+  const done = (v) => { cleanup(); if ((v || null) !== (value || null)) onPick(v || null); };
+  box.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-t]');
+    if (b) return done(b.dataset.t);
+    if (e.target.closest('[data-ok]')) done(input.value || value);
+  });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); done(input.value || value); } });
+  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); cleanup(); anchor.focus(); } };
+  const outside = (e) => { if (!box.contains(e.target) && !anchor.contains(e.target)) cleanup(); };
+  function cleanup() {
+    box.remove();
+    window.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('mousedown', outside);
+    window.removeEventListener('resize', cleanup);
+  }
+  box.cleanup = cleanup;
+  window.addEventListener('keydown', onKey, true);
+  setTimeout(() => document.addEventListener('mousedown', outside), 0);
+  window.addEventListener('resize', cleanup);
+  const r = anchor.getBoundingClientRect();
+  let top = r.bottom + 4;
+  if (top + box.offsetHeight > innerHeight - 8) top = Math.max(8, r.top - box.offsetHeight - 4);
+  box.style.left = Math.max(8, Math.min(r.left, innerWidth - box.offsetWidth - 8)) + 'px';
+  box.style.top = top + 'px';
+  if (!matchMedia('(pointer: coarse)').matches) input.focus();
+}
 
 function searchIndex(data, q) {
   const ql = q.toLowerCase();
@@ -2911,6 +3172,10 @@ function openUserMenu(anchor) {
     if (m === 'logout') {
       await flushPageSave();
       if (S.page) await finalizePage(S.page.id);
+      // после выхода напоминания на это устройство не приходят; подписка браузера остаётся — при следующем входе
+      // она привяжется к тому, кто вошёл
+      const sub = await Push.subscription().catch(() => null);
+      if (sub) await api('POST', '/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
       await api('POST', '/api/logout').catch(() => {});
       await Vault.forget(S.user.id);
       S.user = null;
@@ -3023,6 +3288,38 @@ function openNotesSettings() {
   };
 }
 
+// Переключатель «Напоминания на этом устройстве» в «Настройках задач»
+function bindPushSetting(m) {
+  const sw = $('#set-push', m);
+  const text = $('#push-text', m);
+  const paint = async () => {
+    const why = Push.problem();
+    const on = !why && (await Push.on());
+    sw.checked = on;
+    sw.disabled = !!why;
+    text.innerHTML = why ? esc(why)
+      : on ? 'Напоминания о задачах придут сюда, даже когда Silo закрыт. <button type="button" class="link-btn" id="push-test">Проверить</button>'
+        : 'Включите, чтобы получать напоминания о задачах на этот телефон или компьютер';
+  };
+  paint();
+  sw.onchange = async () => {
+    sw.disabled = true;
+    try {
+      if (sw.checked) await Push.enable(); else await Push.disable();
+    } catch (e) { fail(e); }
+    await paint();
+  };
+  text.addEventListener('click', async (e) => {
+    if (!e.target.closest('#push-test')) return;
+    e.preventDefault();
+    try {
+      const sub = await Push.subscription();
+      await api('POST', '/api/push/test', { endpoint: sub?.endpoint });
+      toast('Пробное уведомление отправлено');
+    } catch (err) { fail(err); }
+  });
+}
+
 function openStatusesDialog({ focus = null } = {}) {
   const m = openModal(`
     <h2>Настройки задач</h2>
@@ -3033,12 +3330,18 @@ function openStatusesDialog({ focus = null } = {}) {
       <label for="st-default">Новые задачи попадают в</label>
       <select id="st-default"></select>
     </div>
+    <h3 class="set-caption">Уведомления</h3>
+    <label class="set-row">
+      <span class="set-text"><b>Напоминания на этом устройстве</b><span id="push-text"></span></span>
+      <input type="checkbox" class="switch" id="set-push" role="switch">
+    </label>
     <div class="modal-actions st-actions">
       <button type="button" class="btn" id="st-add">${icon('plus')}Добавить статус</button>
       <button type="button" class="btn primary" data-close>Готово</button>
     </div>`, 'statuses');
   const list = $('#st-list', m);
   let openPalette = null;
+  bindPushSetting(m);
 
   const refreshOutside = () => { renderTasksBody(); renderTree(); updateCounts(); };
   const apply = (statuses) => { S.statuses = statuses; draw(); refreshOutside(); };

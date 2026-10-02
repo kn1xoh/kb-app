@@ -5,6 +5,7 @@ const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const sanitizeHtml = require('sanitize-html');
 const db = require('./db');
+const push = require('./push');
 
 const PORT = Number(process.env.PORT) || 3000;
 const SESSION_DAYS = 30;
@@ -126,6 +127,7 @@ const fakeSalt = (email, kind) => crypto.createHmac('sha256', SERVER_SECRET).upd
   .digest().subarray(0, 16).toString('base64');
 
 const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const B64U = /^[A-Za-z0-9_-]+={0,2}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 // Проверка набора ключей из браузера: группа пароля и/или группа кода восстановления
 function readKeys(b, { password = true, recovery = true } = {}) {
@@ -640,6 +642,12 @@ const PRIORITIES = ['low', 'medium', 'high'];
 const getTask = (userId, id) => db.get('SELECT * FROM tasks WHERE id = ? AND user_id = ? AND deleted_at IS NULL', id, userId);
 const taskOut = (t) => { const { search_text, user_id, deleted_at, ...rest } = t; return rest; };
 const validDate = (d) => d === null || d === '' || /^\d{4}-\d{2}-\d{2}$/.test(d);
+const validTime = (v) => v === null || v === '' || /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
+// Время напоминания приходит из браузера в ISO (с часовым поясом), в базе — UTC как у datetime('now')
+const sqlTime = (v) => {
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString().slice(0, 19).replace('T', ' ');
+};
 const topPosition = async (userId, status) => (await db.get(`SELECT COALESCE(MIN(position), 1) - 1 AS p FROM tasks
   WHERE user_id = ? AND status = ? AND deleted_at IS NULL AND completed_at IS NULL`, userId, status)).p;
 const idList = (ids) => (Array.isArray(ids) ? [...new Set(ids.map(Number).filter(Number.isInteger))] : []);
@@ -703,10 +711,23 @@ app.patch('/api/tasks/:id', auth, async (req, res) => {
     if (!validDate(b.due_date)) return httpError(res, 400, 'Дата должна быть в формате ГГГГ-ММ-ДД');
     next.due_date = b.due_date || null;
   }
-  await db.run(`UPDATE tasks SET title = ?, description = ?, status = ?, priority = ?, due_date = ?, position = ?,
-    search_text = ?, updated_at = datetime('now') WHERE id = ?`,
-  next.title, next.description, next.status, next.priority, next.due_date, next.position,
-  searchText(next.title, next.description), t.id);
+  if (b.due_time !== undefined) {
+    if (!validTime(b.due_time)) return httpError(res, 400, 'Время должно быть в формате ЧЧ:ММ');
+    next.due_time = b.due_time || null;
+  }
+  if (!next.due_date) next.due_time = null;
+  if (b.remind_at !== undefined) {
+    const at = b.remind_at ? sqlTime(b.remind_at) : null;
+    if (at === undefined) return httpError(res, 400, 'Неверное время напоминания');
+    if (at !== t.remind_at) next.reminded_at = null; // новое время — напоминание снова ждёт отправки
+    next.remind_at = at;
+    const before = Number(b.remind_before);
+    next.remind_before = at && b.remind_before != null && Number.isInteger(before) && before >= -1440 && before <= 60 * 24 * 31 ? before : null;
+  }
+  await db.run(`UPDATE tasks SET title = ?, description = ?, status = ?, priority = ?, due_date = ?, due_time = ?, position = ?,
+    remind_at = ?, remind_before = ?, reminded_at = ?, search_text = ?, updated_at = datetime('now') WHERE id = ?`,
+  next.title, next.description, next.status, next.priority, next.due_date, next.due_time, next.position,
+  next.remind_at, next.remind_before, next.reminded_at, searchText(next.title, next.description), t.id);
   res.json(taskOut(await getTask(req.user.id, t.id)));
 });
 
@@ -767,6 +788,98 @@ app.post('/api/tasks/:id/favorite', auth, async (req, res) => {
   await db.run(`UPDATE tasks SET favorite_at = ${req.body?.favorite ? "datetime('now')" : 'NULL'} WHERE id = ?`, t.id);
   res.json({ favorite_at: (await getTask(req.user.id, t.id)).favorite_at });
 });
+
+// ---------- уведомления (напоминания о задачах) ----------
+// Браузер подписывается на уведомления (у каждого устройства своя подписка), сервер раз в минуту
+// ищет задачи, по которым пора напомнить, и отправляет уведомление на все устройства пользователя.
+// Название задачи зашифровано — сервер отправляет его как есть, расшифровывает уже устройство (sw.js).
+
+let VAPID = null;
+async function loadVapid() {
+  const row = await db.get("SELECT value FROM meta WHERE key = 'vapid'");
+  if (row) return JSON.parse(row.value);
+  await db.run("INSERT OR IGNORE INTO meta (key, value) VALUES ('vapid', ?)", JSON.stringify(push.createVapidKeys()));
+  return JSON.parse((await db.get("SELECT value FROM meta WHERE key = 'vapid'")).value);
+}
+const siteOrigin = (req) => `${req.protocol}://${req.get('host')}`;
+
+app.get('/api/push/key', auth, (req, res) => res.json({ publicKey: VAPID.publicKey }));
+
+app.post('/api/push/subscribe', auth, async (req, res) => {
+  const { endpoint, keys } = req.body || {};
+  if (!push.validEndpoint(endpoint) || !B64U.test(keys?.p256dh || '') || !B64U.test(keys?.auth || '')) {
+    return httpError(res, 400, 'Браузер прислал неверную подписку на уведомления');
+  }
+  // Одно устройство — одна подписка; если на нём раньше входил другой пользователь, подписка переходит к новому
+  await db.run(`INSERT INTO push_subs (user_id, endpoint, p256dh, auth, origin) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth,
+    origin = excluded.origin`, req.user.id, endpoint, keys.p256dh, keys.auth, siteOrigin(req));
+  res.json({ ok: true });
+});
+
+app.post('/api/push/unsubscribe', auth, async (req, res) => {
+  await db.run('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?', String(req.body?.endpoint || ''), req.user.id);
+  res.json({ ok: true });
+});
+
+async function pushToSubs(subs, data) {
+  let sent = 0;
+  await Promise.all(subs.map(async (s) => {
+    const r = await push.send(s, data, VAPID, s.origin.startsWith('https://') ? s.origin : 'mailto:silo@example.com');
+    if (r === 'ok') sent++;
+    if (r === 'gone') await db.run('DELETE FROM push_subs WHERE id = ?', s.id);
+  }));
+  return sent;
+}
+
+// Пробное уведомление на это устройство — из «Настроек задач»
+app.post('/api/push/test', auth, async (req, res) => {
+  const subs = await db.all('SELECT * FROM push_subs WHERE user_id = ? AND endpoint = ?', req.user.id, String(req.body?.endpoint || ''));
+  if (!subs.length) return httpError(res, 400, 'Это устройство не подписано на уведомления');
+  const sent = await pushToSubs(subs, { kind: 'test' });
+  if (!sent) return httpError(res, 502, 'Служба уведомлений браузера не приняла уведомление. Попробуйте выключить и снова включить уведомления');
+  res.json({ ok: true });
+});
+
+const REMIND_LATE_HOURS = 12; // если сервер был выключен дольше, старые напоминания не отправляем
+let remindBusy = false;
+async function sendReminders() {
+  if (remindBusy) return;
+  remindBusy = true;
+  try {
+    const due = await db.all(`SELECT id, user_id, title, due_date, due_time, remind_at FROM tasks
+      WHERE reminded_at IS NULL AND remind_at IS NOT NULL AND remind_at <= datetime('now')
+      AND deleted_at IS NULL AND completed_at IS NULL ORDER BY remind_at LIMIT 200`);
+    if (!due.length) return;
+    // Сначала отмечаем отправленными — чтобы при сбое сети одно напоминание не пришло несколько раз
+    await db.tx(async () => {
+      for (const t of due) await db.run("UPDATE tasks SET reminded_at = datetime('now') WHERE id = ?", t.id);
+    });
+    const late = Date.now() - REMIND_LATE_HOURS * 3600e3;
+    for (const t of due) {
+      if (new Date(t.remind_at.replace(' ', 'T') + 'Z').getTime() < late) continue;
+      const subs = await db.all('SELECT * FROM push_subs WHERE user_id = ?', t.user_id);
+      if (!subs.length) continue;
+      await pushToSubs(subs, {
+        kind: 'task', id: t.id, u: t.user_id,
+        title: t.title.length <= 3000 ? t.title : '', // у уведомления ограничен размер
+        due_date: t.due_date, due_time: t.due_time,
+      });
+    }
+  } catch (e) {
+    console.error('Напоминания:', e.message || e);
+  } finally {
+    remindBusy = false;
+  }
+}
+// Проверка в начале каждой минуты
+function startReminders() {
+  const tick = () => {
+    sendReminders();
+    setTimeout(tick, 60e3 - (Date.now() % 60e3) + 500).unref();
+  };
+  tick();
+}
 
 // ---------- tasks trash («Недавно удалённые» задачи; у Заметок своя корзина) ----------
 
@@ -996,6 +1109,7 @@ app.use((err, req, res, next) => {
 async function main() {
   await db.init();
   SERVER_SECRET = await loadServerSecret();
+  VAPID = await loadVapid();
 
   // Заметки без названия, оставшиеся с прошлых версий
   {
@@ -1018,6 +1132,7 @@ async function main() {
 
   await purgeExpired();
   setInterval(() => purgeExpired().catch((e) => console.error(e)), 6 * 3600e3).unref();
+  startReminders();
 
   app.listen(PORT, () => console.log(`Silo запущен: http://localhost:${PORT}${db.remote ? ' (база — Turso)' : ''}`));
 }
