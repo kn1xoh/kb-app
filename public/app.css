@@ -1135,3 +1135,10 @@ body:has(.bulk-bar) #toasts { bottom: calc(84px + env(safe-area-inset-bottom, 0p
   .dp-time input { height: var(--tap); }
   .datepicker .dp-time-x { width: var(--tap); height: var(--tap); }
 }
+
+/* панель «Не сохранено … Повторить»: висит, пока правки не дойдут до сервера */
+.unsaved-bar { animation: none; }
+.unsaved-bar .toast-action { color: #fff; }
+.unsaved-bar .toast-action:disabled { opacity: .6; text-decoration: none; cursor: default; }
+@media (max-width: 860px), (pointer: coarse) { .unsaved-bar .toast-action { min-height: var(--tap); padding: 0 4px; } }
+.save-state.unsaved { color: var(--danger); }

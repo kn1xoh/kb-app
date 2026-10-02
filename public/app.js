@@ -162,10 +162,10 @@ async function api(method, url, body) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'kb' },
     body: body === undefined ? undefined : JSON.stringify(body),
     credentials: 'same-origin',
-  });
+  }).catch(() => { throw new Error('Нет связи с сервером — проверьте интернет'); });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && S.user) { S.user = null; renderAuth(); }
-  if (!res.ok) throw new Error(data.error || 'Что-то пошло не так. Попробуйте ещё раз');
+  if (!res.ok) throw Object.assign(new Error(data.error || 'Что-то пошло не так. Попробуйте ещё раз'), { status: res.status });
   return Vault.ready() ? openBody(data) : data;
 }
 
@@ -252,6 +252,94 @@ function toast(text, type = '', action = null) {
   setTimeout(() => el.remove(), action ? 7000 : 3200);
 }
 const fail = (e) => toast(e.message, 'error');
+
+// ---------- несохранённые изменения ----------
+// Если запрос на сохранение не прошёл (нет сети, сервер недоступен), правки не теряются: они ждут здесь,
+// а внизу висит панель «Не сохранено … Повторить». Повтор — по кнопке, сам раз в 20 секунд,
+// при появлении сети и после любого удачного сохранения.
+const Unsaved = {
+  items: new Map(), // 'page:5' / 'task:7' → { url, data, name }
+  busy: false,
+  timer: null,
+  add(key, url, data, name) {
+    const old = this.items.get(key);
+    this.items.set(key, { url, data: { ...(old?.data || {}), ...data }, name: name || old?.name || '' });
+    preseal(...Object.values(data).filter((v) => typeof v === 'string'));
+    if (!this.timer) this.timer = setInterval(() => this.retry(true), 20000);
+    this.paint();
+  },
+  // Удачное сохранение: отправленные поля новее тех, что ждали, — их больше не повторяем
+  saved(key, data) {
+    const it = this.items.get(key);
+    if (it) {
+      Object.keys(data).forEach((k) => delete it.data[k]);
+      if (!Object.keys(it.data).length) this.items.delete(key);
+      this.paint();
+    }
+    if (this.items.size) setTimeout(() => this.retry(true), 0);
+  },
+  async retry(quiet = false) {
+    if (this.busy || !this.items.size || !S.user) return;
+    this.busy = true;
+    this.paint();
+    let lastError = null;
+    for (const [key, it] of [...this.items]) {
+      const data = { ...it.data };
+      try {
+        const r = await api('PATCH', it.url, data);
+        const cur = this.items.get(key);
+        if (cur) { Object.keys(data).forEach((k) => { if (cur.data[k] === data[k]) delete cur.data[k]; }); if (!Object.keys(cur.data).length) this.items.delete(key); }
+        this.applied(key, r);
+      } catch (e) {
+        // заметку или задачу уже удалили — сохранять некуда
+        if (e.status === 404) this.items.delete(key);
+        else lastError = e;
+      }
+    }
+    this.busy = false;
+    if (!this.items.size) { clearInterval(this.timer); this.timer = null; }
+    this.paint();
+    if (!quiet) toast(lastError ? `Снова не получилось. ${lastError.message}` : 'Изменения сохранены', lastError ? 'error' : '');
+  },
+  // Ответ сервера после повтора — обновляем то, что на экране
+  applied(key, r) {
+    const [kind, id] = key.split(':');
+    if (kind === 'page') {
+      const p = pageById(Number(id));
+      if (p && r.updated_at) p.updated_at = r.updated_at;
+      if (S.page?.id === Number(id) && !pendingSave && !this.items.has(key)) setSaveState('Сохранено');
+    } else {
+      const t = S.tasks.find((x) => x.id === Number(id));
+      if (t) { Object.assign(t, r); renderTasksBody(); }
+      const panelSave = $('.panel .tp-save');
+      if (panelSave && $('#tp-fav')?.dataset.id === id && !this.items.has(key)) { panelSave.textContent = 'Сохранено'; panelSave.classList.remove('unsaved'); }
+    }
+  },
+  paint() {
+    let bar = $('#unsaved-bar');
+    if (!this.items.size) { bar?.remove(); return; }
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'unsaved-bar';
+      bar.className = 'toast error unsaved-bar';
+      bar.setAttribute('role', 'alert');
+      bar.innerHTML = '<span class="ub-text"></span><button class="toast-action" type="button"></button>';
+      $('button', bar).onclick = () => this.retry();
+      $('#toasts').prepend(bar);
+    }
+    const list = [...this.items.values()];
+    const what = list.length === 1
+      ? (list[0].name ? `Не сохранено: ${list[0].name}` : 'Не сохранено')
+      : `Не сохранено: ${list.length} ${plural(list.length, 'изменение', 'изменения', 'изменений')}`;
+    $('.ub-text', bar).textContent = this.busy ? 'Сохранение…' : what;
+    const btn = $('button', bar);
+    btn.textContent = 'Повторить';
+    btn.disabled = this.busy;
+  },
+  clear() { this.items.clear(); clearInterval(this.timer); this.timer = null; this.paint(); },
+};
+window.addEventListener('online', () => Unsaved.retry(true));
+const quoted = (s, def) => (s && s.trim() ? `«${s.trim().length > 40 ? `${s.trim().slice(0, 40)}…` : s.trim()}»` : def);
 
 // ---------- state ----------
 const S = {
@@ -1251,10 +1339,13 @@ async function flushPageSave() {
     const p = pageById(id);
     if (p) { p.updated_at = r.updated_at; }
     if (S.page?.id === id) { const meta = $('#page-changed'); if (meta) meta.textContent = `Изменено ${ago(r.updated_at)}`; }
-    setSaveState('Сохранено');
+    Unsaved.saved(`page:${id}`, data);
+    setSaveState(Unsaved.items.has(`page:${id}`) ? 'Не сохранено' : 'Сохранено');
   } catch (e) {
+    if (e.status === 404 || e.status === 401) { setSaveState(''); if (e.status === 404) fail(e); return; }
     setSaveState('Не сохранено');
-    fail(e);
+    // правки не теряем — их можно отправить ещё раз (панель «Не сохранено … Повторить»)
+    Unsaved.add(`page:${id}`, `/api/pages/${id}`, data, `заметка ${quoted(pageById(id)?.title, 'без названия')}`);
   }
 }
 function queuePageSave(data) {
@@ -1272,7 +1363,7 @@ function presealPage() {
   const untitled = !pageById(S.page.id)?.title.trim();
   preseal(d.title, d.content, untitled ? firstLine(S.page.content || '') : '');
 }
-function setSaveState(t) { const el = $('#save-state'); if (el) el.textContent = t; }
+function setSaveState(t) { const el = $('#save-state'); if (el) { el.textContent = t; el.classList.toggle('unsaved', t === 'Не сохранено'); } }
 
 // Заметка без названия не сохраняется: при уходе с неё название берётся из первой строки текста,
 // а совсем пустая удаляется. Текст зашифрован, поэтому первую строку находит браузер.
@@ -1298,6 +1389,13 @@ window.addEventListener('beforeunload', () => {
   // заметка без названия — один запрос, который и сохраняет, и даёт название (или удаляет пустую)
   if (S.page && !pageById(S.page.id)?.title.trim()) sendNow('POST', `/api/pages/${S.page.id}/finalize`, { ...data, ...finalizeBody(S.page.content) });
   else if (pendingSave) sendNow('PATCH', `/api/pages/${pendingSave.id}`, data);
+});
+// Есть несохранённое — последняя попытка отправить и предупреждение браузера «Покинуть сайт?»
+window.addEventListener('beforeunload', (e) => {
+  if (!Unsaved.items.size) return;
+  Unsaved.items.forEach((it) => sendNow('PATCH', it.url, it.data));
+  e.preventDefault();
+  e.returnValue = '';
 });
 function sendNow(method, url, body) {
   const sealed = Vault.ready() ? sealNow(body) : body;
@@ -2568,8 +2666,14 @@ async function updateTask(t, patch) {
   try {
     Object.assign(t, await api('PATCH', `/api/tasks/${t.id}`, patch));
     renderTasksBody();
-    return true;
-  } catch (e) { fail(e); return false; }
+    Unsaved.saved(`task:${t.id}`, patch);
+    return !Unsaved.items.has(`task:${t.id}`);
+  } catch (e) { taskSaveFailed(t, patch, e); return false; }
+}
+// Не сохранилось — правки ждут повтора (панель «Не сохранено … Повторить»)
+function taskSaveFailed(t, patch, e) {
+  if (e.status === 404 || e.status === 401) { if (e.status === 404) fail(e); return; }
+  Unsaved.add(`task:${t.id}`, `/api/tasks/${t.id}`, patch, `задача ${quoted(patch.title || t.title, 'без названия')}`);
 }
 
 function setupBoardDnD(root) {
@@ -2679,6 +2783,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     if (!ok) saveFailed = true;
     if (--saving === 0) {
       saveEl.textContent = saveFailed ? 'Не сохранено' : 'Сохранено';
+      saveEl.classList.toggle('unsaved', saveFailed);
       saveFailed = false;
     }
     return ok;
@@ -2720,7 +2825,10 @@ function openTaskPanel(id, { justCreated = false } = {}) {
         t.title = r.title;
         refreshTasks();
       }
-    } catch (e) { fail(e); }
+    } catch (e) {
+      // текст не теряем: сохраним его обычным запросом при повторе (название — первая строка)
+      if (body.title) { t.title = body.title; refreshTasks(); taskSaveFailed(t, body, e); } else fail(e);
+    }
   };
   // Закрытие вкладки с открытой карточкой: один keepalive-запрос (название из описания или сохранение описания)
   panel.unloadFn = () => {
@@ -2740,7 +2848,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     if (v && v !== t.title) patch.title = v;
     if (descDirty) { patch.description = serializeEditor(desc); descDirty = false; }
     if (!Object.keys(patch).length) return;
-    try { Object.assign(t, await api('PATCH', `/api/tasks/${t.id}`, patch)); } catch (e) { fail(e); }
+    try { Object.assign(t, await api('PATCH', `/api/tasks/${t.id}`, patch)); Unsaved.saved(`task:${t.id}`, patch); } catch (e) { taskSaveFailed(t, patch, e); }
   };
   const onKey = (e) => { if (e.key === 'Escape' && !$('.modal')) close(); };
   document.addEventListener('keydown', onKey);
@@ -2792,7 +2900,12 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     if (!descDirty) return;
     descDirty = false;
     await track(async () => {
-      try { Object.assign(t, await api('PATCH', `/api/tasks/${t.id}`, { description: serializeEditor(desc) })); return true; } catch (e) { fail(e); return false; }
+      const patch = { description: serializeEditor(desc) };
+      try {
+        Object.assign(t, await api('PATCH', `/api/tasks/${t.id}`, patch));
+        Unsaved.saved(`task:${t.id}`, patch);
+        return !Unsaved.items.has(`task:${t.id}`);
+      } catch (e) { taskSaveFailed(t, patch, e); return false; }
     });
   };
   const saveDesc = debounce(saveDescNow, 700);
@@ -3125,6 +3238,7 @@ function openUserMenu(anchor) {
       await Vault.forget(S.user.id);
       S.user = null;
       S.page = null;
+      Unsaved.clear();
       history.replaceState(null, '', '/');
       renderAuth();
     }
