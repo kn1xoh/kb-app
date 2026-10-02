@@ -1095,3 +1095,11 @@ body:has(.bulk-bar) #toasts { bottom: calc(84px + env(safe-area-inset-bottom, 0p
 /* телефон: подсказка «Esc» в поиске не нужна (и обрезалась), «+» не висит поверх открытого меню */
 @media (max-width: 860px), (pointer: coarse) { .palette-input .kbd { display: none; } }
 .shell.nav-open .fab { display: none; }
+
+/* ---------- показать пароль ---------- */
+.field > .pass-wrap { position: relative; display: block; font: inherit; color: inherit; }
+.pass-wrap .input { padding-right: 44px; }
+.pass-eye { position: absolute; top: 50%; right: 5px; transform: translateY(-50%); color: var(--faint); }
+.pass-eye, .pass-eye:hover { background: none; width: 34px; height: 34px; }
+.pass-eye:hover { color: var(--fg); }
+.pass-eye[aria-pressed="true"] { color: var(--accent); }

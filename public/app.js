@@ -63,6 +63,8 @@ const ICONS = {
   text: 'M5 7V5h14v2M12 5v14M9 19h6',
   chevronDown: 'M7 10l5 5 5-5',
   filter: 'M4 7h16M7 12h10M10 17h4',
+  eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+  eyeOff: 'M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2',
   star: 'M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.75 1-5.8L3.5 9.7l5.9-.9z',
 };
 // Логотип Silo: вид сверху в шахту силоса — стена и винтовая лестница, уходящая вглубь
@@ -316,7 +318,44 @@ function authScreen(title, sub, body) {
         ${body}
       </div>
     </main>`;
+  passToggle($('#app'));
 }
+
+// Глазик «Показать пароль» в полях пароля. Пока пароль скрыт, iPhone даёт только системную
+// клавиатуру (защита iOS); показанный пароль — обычное поле, работает любая клавиатура
+function passToggle(root) {
+  const fields = $$('input[type=password]', root);
+  if (!fields.length) return;
+  for (const f of fields) { f.autocapitalize = 'off'; f.spellcheck = false; f.setAttribute('autocorrect', 'off'); }
+  // при переключении фокус остаётся в поле, а клавиатура телефона меняется на нужную
+  const setShown = (f, show, refocus) => {
+    f.type = show ? 'text' : 'password';
+    if (refocus) { const n = f.value.length; f.blur(); f.focus(); f.setSelectionRange(n, n); }
+  };
+  for (const f of fields) {
+    const wrap = document.createElement('span');
+    wrap.className = 'pass-wrap';
+    f.replaceWith(wrap);
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'icon-btn pass-eye';
+    const sync = () => {
+      const shown = f.type === 'text';
+      b.innerHTML = icon(shown ? 'eyeOff' : 'eye');
+      b.title = shown ? 'Скрыть пароль' : 'Показать пароль';
+      b.setAttribute('aria-label', b.title);
+      b.setAttribute('aria-pressed', shown);
+    };
+    let had = false;
+    b.addEventListener('pointerdown', () => { had = document.activeElement === f; });
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.onclick = (e) => { e.preventDefault(); setShown(f, f.type === 'password', had); sync(); };
+    wrap.append(f, b);
+    f.hidePass = () => { f.type = 'password'; sync(); };
+    sync();
+  }
+}
+const hidePasswords = (root) => $$('.pass-wrap .input', root).forEach((f) => f.hidePass());
 const authField = (id, label, type = 'text', auto = 'off', extra = '') =>
   `<label class="field"><span>${label}</span><input class="input" id="${id}" type="${type}" autocomplete="${auto}" ${extra}></label>`;
 const MIN_PASSWORD = 8;
@@ -3178,6 +3217,7 @@ function bindProfile(m) {
       name.value = user.name;
       email.value = user.email;
       pass.value = '';
+      pass.hidePass?.();
       updateUserBtn();
       toast(body.email ? 'Email изменён — входите с новым' : 'Имя изменено');
     } catch (ex) { err.textContent = ex.message; }
@@ -3218,6 +3258,7 @@ function openAccountDialog() {
     </div>
     <div class="modal-actions"><button type="button" class="btn" data-close>Готово</button></div>`);
   bindProfile(m);
+  passToggle(m);
   $('#pw-form', m).onsubmit = async (e) => {
     e.preventDefault();
     const btn = $('#pw-form .btn.primary', m);
@@ -3227,6 +3268,7 @@ function openAccountDialog() {
       btn.disabled = true;
       await api('POST', '/api/me/keys', await Vault.passwordKeys($('#pw-new', m).value));
       $('#pw-new', m).value = $('#pw-new2', m).value = '';
+      hidePasswords($('#pw-form', m));
       toast('Пароль изменён');
     } catch (err) { $('#pw-err', m).textContent = err.message; }
     btn.disabled = false;
