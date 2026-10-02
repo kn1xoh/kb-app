@@ -17,9 +17,6 @@ const STATUS_COLORS = {
 // Статусы задач пользователя (S.statuses). todo — встроенный: в него уходят задачи удалённого статуса
 const statusOf = (key) => S.statuses.find((s) => s.key === key) || { key, name: 'Без статуса', color: 'gray' };
 const statusColor = (key) => `var(--st-${statusOf(key).color})`;
-// Где выбирается время срока: 'picker' — строка «Время» внизу календаря, 'button' — отдельная кнопка рядом с датой
-// (временно для сравнения вариантов: localStorage['kb-time-ui'])
-const TIME_UI = (() => { try { return JSON.parse(localStorage.getItem('kb-time-ui')) || 'picker'; } catch { return 'picker'; } })();
 const PRIORITY = { high: 'Высокий', medium: 'Средний', low: 'Низкий' };
 
 // ---------- icons ----------
@@ -2658,7 +2655,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
         <span>Приоритет</span>
         <select id="tp-prio">${Object.entries(PRIORITY).map(([k, v]) => `<option value="${k}" ${t.priority === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
         <span>Срок</span>
-        <span class="due-pair"><button type="button" class="date-btn" id="tp-due"></button>${TIME_UI === 'button' ? '<button type="button" class="date-btn time-btn" id="tp-time"></button>' : ''}</span>
+        <button type="button" class="date-btn" id="tp-due"></button>
         <span>Напомнить</span>
         <button type="button" class="date-btn" id="tp-remind"></button>
         <span>Создана</span>
@@ -2770,19 +2767,11 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   if (statusSel) statusSel.onchange = (e) => update({ status: e.target.value });
   $('#tp-prio', panel).onchange = (e) => update({ priority: e.target.value });
   const dueBtn = $('#tp-due', panel);
-  const timeBtn = $('#tp-time', panel);
   const remindBtn = $('#tp-remind', panel);
   const paintDue = () => {
     const overdue = !isDone(t) && isOverdue(t);
-    const inPicker = TIME_UI !== 'button';
     dueBtn.className = `date-btn ${t.due_date ? '' : 'no-date'} ${overdue ? 'overdue' : ''}`;
-    dueBtn.innerHTML = `${icon('calendar')}<span>${t.due_date ? (inPicker ? withTime(dueLong(t.due_date), t.due_time) : dueLong(t.due_date)) : 'Без срока'}</span>`;
-    if (timeBtn) {
-      timeBtn.hidden = !t.due_date;
-      timeBtn.className = `date-btn time-btn ${t.due_time ? '' : 'no-date'} ${overdue ? 'overdue' : ''}`;
-      timeBtn.innerHTML = t.due_time ? `${icon('clock')}<span>${t.due_time}</span>` : `${icon('clock')}<span>Время</span>`;
-      timeBtn.title = t.due_time ? 'Изменить время' : 'Добавить время';
-    }
+    dueBtn.innerHTML = `${icon('calendar')}<span>${t.due_date ? withTime(dueLong(t.due_date), t.due_time) : 'Без срока'}</span>`;
     const pending = remindPending(t);
     remindBtn.className = `date-btn ${t.remind_at ? '' : 'no-date'} ${t.remind_at && !pending ? 'past' : ''}`;
     remindBtn.innerHTML = `${icon('bell')}<span>${t.remind_at ? esc(remindLabel(t)) : 'Не напоминать'}</span>`;
@@ -2794,9 +2783,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     await update(duePatch(t, date, time));
     paintDue();
   };
-  dueBtn.onclick = () => openDatePicker(dueBtn, t.due_date, (d, tm) => setDue(d, TIME_UI === 'button' ? (d ? t.due_time : null) : tm),
-    { withTime: TIME_UI !== 'button', time: t.due_time });
-  if (timeBtn) timeBtn.onclick = () => openTimePicker(timeBtn, t.due_time, (tm) => setDue(t.due_date, tm));
+  dueBtn.onclick = () => openDatePicker(dueBtn, t.due_date, setDue, { withTime: true, time: t.due_time });
   remindBtn.onclick = () => openRemindMenu(remindBtn, t, async (patch) => { await update(patch); paintDue(); });
 
   const desc = $('#tp-desc', panel);
@@ -3090,48 +3077,6 @@ function openDatePicker(anchor, value, onPick, opts = {}) {
   render();
   place();
   focusCell();
-}
-
-// Выбор времени отдельно от даты: поле времени + частые варианты. onPick получает 'ЧЧ:ММ' или null (без времени)
-const TIME_QUICK = ['09:00', '12:00', '15:00', '18:00', '21:00'];
-function openTimePicker(anchor, value, onPick) {
-  closeMenus();
-  const box = document.createElement('div');
-  box.className = 'menu timepicker';
-  box.setAttribute('role', 'dialog');
-  box.setAttribute('aria-label', 'Время срока');
-  box.innerHTML = `
-    <div class="tm-row"><input type="time" class="input" id="tm-in" value="${value || ''}" aria-label="Время">
-      <button type="button" class="btn primary" data-ok>Готово</button></div>
-    <div class="tm-quick">${TIME_QUICK.map((t) => `<button type="button" data-t="${t}" class="${t === value ? 'on' : ''}">${t}</button>`).join('')}</div>
-    ${value ? `<button type="button" class="dp-clear" data-t="">${icon('x')}Без времени</button>` : ''}`;
-  document.body.append(box);
-  const input = $('#tm-in', box);
-  const done = (v) => { cleanup(); if ((v || null) !== (value || null)) onPick(v || null); };
-  box.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-t]');
-    if (b) return done(b.dataset.t);
-    if (e.target.closest('[data-ok]')) done(input.value || value);
-  });
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); done(input.value || value); } });
-  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); cleanup(); anchor.focus(); } };
-  const outside = (e) => { if (!box.contains(e.target) && !anchor.contains(e.target)) cleanup(); };
-  function cleanup() {
-    box.remove();
-    window.removeEventListener('keydown', onKey, true);
-    document.removeEventListener('mousedown', outside);
-    window.removeEventListener('resize', cleanup);
-  }
-  box.cleanup = cleanup;
-  window.addEventListener('keydown', onKey, true);
-  setTimeout(() => document.addEventListener('mousedown', outside), 0);
-  window.addEventListener('resize', cleanup);
-  const r = anchor.getBoundingClientRect();
-  let top = r.bottom + 4;
-  if (top + box.offsetHeight > innerHeight - 8) top = Math.max(8, r.top - box.offsetHeight - 4);
-  box.style.left = Math.max(8, Math.min(r.left, innerWidth - box.offsetWidth - 8)) + 'px';
-  box.style.top = top + 'px';
-  if (!matchMedia('(pointer: coarse)').matches) input.focus();
 }
 
 function searchIndex(data, q) {
