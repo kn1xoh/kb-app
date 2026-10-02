@@ -1164,3 +1164,11 @@ body:has(.bulk-bar) #toasts { bottom: calc(84px + env(safe-area-inset-bottom, 0p
 html.kb-open .shell { position: fixed; left: 0; right: 0; top: var(--kb-top, 0px); height: var(--kb-h, 100%); }
 html.kb-open .overlay { inset: auto 0 auto 0; top: var(--kb-top, 0px); height: var(--kb-h, 100%); }
 html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h, 100%); padding-bottom: 0; }
+
+/* ---------- отметка «Сохранено» под заголовком раздела ---------- */
+.saved-mark { margin-left: 10px; font-weight: 500; font-size: 13px; color: var(--accent); white-space: nowrap; }
+.saved-mark svg.i { width: 13px; height: 13px; stroke-width: 2.6; margin-right: 4px; vertical-align: -2px; }
+.saved-mark.saving { color: var(--faint); }
+.saved-mark.fail { color: var(--danger); }
+.saved-mark.ok { animation: saved-out .5s ease var(--fade-in, 3500ms) forwards; }
+@keyframes saved-out { to { opacity: 0; } }

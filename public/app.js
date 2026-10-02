@@ -253,6 +253,31 @@ function toast(text, type = '', action = null) {
 }
 const fail = (e) => toast(e.message, 'error');
 
+// Отметка «Сохранено» в строке-счётчике под заголовком раздела после выхода из заметки/задачи.
+// state: 'saving' → 'ok' (гаснет через несколько секунд) или 'fail'. Ставится только по ответу сервера.
+const SAVED_SHOW_MS = 4000;
+let savedMarkTimer = 0;
+function setSavedMark(kind, state) {
+  clearTimeout(savedMarkTimer);
+  S.savedMark = { kind, state, at: Date.now() };
+  if (state === 'ok') savedMarkTimer = setTimeout(() => { S.savedMark = null; paintSavedMark(); }, SAVED_SHOW_MS + 600);
+  paintSavedMark();
+}
+function paintSavedMark() {
+  $$('.saved-mark').forEach((el) => el.remove());
+  const m = S.savedMark;
+  if (!m) return;
+  const left = m.state === 'ok' ? SAVED_SHOW_MS - (Date.now() - m.at) : 0;
+  if (m.state === 'ok' && left <= 0) return;
+  const sub = m.kind === 'task' ? $('#tasks-sub') : $('.notes-home .home-sub');
+  if (!sub) return;
+  sub.insertAdjacentHTML('beforeend', m.state === 'saving' ? '<span class="saved-mark saving">Сохранение…</span>'
+    : m.state === 'fail' ? '<span class="saved-mark fail">Не сохранено</span>'
+    : `<span class="saved-mark ok">${icon('check')}Сохранено</span>`);
+  // при перерисовке раздела отметка не начинает гаснуть заново
+  if (m.state === 'ok') sub.lastElementChild.style.setProperty('--fade-in', `${Math.max(0, left - 500)}ms`);
+}
+
 // ---------- state ----------
 const S = {
   user: null,
@@ -674,8 +699,17 @@ async function route() {
   if (!S.user) return;
   const [, section, id] = location.hash.split('/');
   if (SECTIONS.some((s) => s.id === section)) store.set(LAST_SECTION_KEY, section);
+  const leaving = S.page && !(section === 'notes' && Number(id) === S.page.id) ? S.page : null;
   await flushPageSave();
-  if (S.page && !(section === 'notes' && Number(id) === S.page.id)) await finalizePage(S.page.id);
+  if (leaving) {
+    const r = await finalizePage(leaving.id);
+    // заметку меняли — показываем в списке, что она сохранилась (пустая удалена — отмечать нечего)
+    if (leaving.touched && r !== 'deleted') {
+      const ok = r !== 'fail' && !pageSaveFailed.has(leaving.id);
+      setSavedMark('page', ok ? 'ok' : 'fail');
+    }
+    pageSaveFailed.delete(leaving.id);
+  }
   closeOverlays(true);
   if (section !== 'notes' || id) { S.selectMode = false; S.selected.clear(); }
   S.taskSelect = false;
@@ -1053,6 +1087,7 @@ function renderNotesHome() {
   $('#home-new').onclick = () => createPage(null);
   $('#notes-settings').onclick = () => openNotesSettings();
   updateFab();
+  paintSavedMark();
   bindTrash();
   if (S.trash === null) loadTrash();
   const outline = $('#outline');
@@ -1245,6 +1280,7 @@ const plural = (n, one, few, many) => {
    Notes: page editor
    ========================================================= */
 let pendingSave = null;
+const pageSaveFailed = new Set(); // заметки, у которых сохранение не прошло (для отметки в списке)
 const pageSave = debounce(() => flushPageSave(), 700);
 
 async function flushPageSave() {
@@ -1260,12 +1296,14 @@ async function flushPageSave() {
     if (S.page?.id === id) { const meta = $('#page-changed'); if (meta) meta.textContent = `Изменено ${ago(r.updated_at)}`; }
     setSaveState('Сохранено');
   } catch (e) {
+    pageSaveFailed.add(id);
     setSaveState('Не сохранено');
     fail(e);
   }
 }
 function queuePageSave(data) {
   if (!S.page) return;
+  S.page.touched = true;
   pendingSave = { id: S.page.id, data: { ...(pendingSave?.id === S.page.id ? pendingSave.data : {}), ...data } };
   if (data.content !== undefined) S.page.content = data.content;
   presealPage();
@@ -1286,7 +1324,7 @@ function setSaveState(t) { const el = $('#save-state'); if (el) el.textContent =
 const finalizeBody = (html) => { const line = firstLine(html || ''); return line ? { title: line } : { content: '' }; };
 async function finalizePage(id) {
   const p = pageById(id);
-  if (!p || p.title.trim()) return;
+  if (!p || p.title.trim()) return '';
   try {
     const content = S.page?.id === id ? S.page.content : (await api('GET', `/api/pages/${id}`)).content;
     const r = await api('POST', `/api/pages/${id}/finalize`, finalizeBody(content));
@@ -1296,7 +1334,8 @@ async function finalizePage(id) {
       updateCounts();
     } else if (r.title) p.title = r.title;
     renderTree();
-  } catch { /* не мешаем уйти со страницы */ }
+    return r.deleted ? 'deleted' : '';
+  } catch { return 'fail'; /* не мешаем уйти со страницы */ }
 }
 
 window.addEventListener('beforeunload', () => {
@@ -2202,6 +2241,7 @@ function renderTasksBody() {
   }
   if (S.taskView === 'board') setupBoardDnD(body);
   if (S.taskTrash === null && S.taskTrashOpen) loadTaskTrash();
+  paintSavedMark();
 }
 
 // Кнопка «Фильтр»: подсвечена и показывает число групп, если что-то выбрано
@@ -2683,17 +2723,26 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   // Индикатор сохранения, как у заметок: «Изменено» → «Сохранение…» → «Сохранено» / «Не сохранено»
   const saveEl = $('.tp-save', panel);
   let saving = 0, saveFailed = false;
-  const markDirty = () => { saveEl.textContent = 'Изменено'; };
-  const track = async (run) => {
-    saving++;
-    saveEl.textContent = 'Сохранение…';
-    const ok = await run();
-    if (!ok) saveFailed = true;
-    if (--saving === 0) {
-      saveEl.textContent = saveFailed ? 'Не сохранено' : 'Сохранено';
-      saveFailed = false;
-    }
-    return ok;
+  // для отметки «Сохранено» в списке после закрытия: меняли ли задачу, что ещё отправляется, была ли ошибка
+  let touched = justCreated, anyFailed = false;
+  const inflight = new Set();
+  const markDirty = () => { touched = true; saveEl.textContent = 'Изменено'; };
+  const track = (run) => {
+    touched = true;
+    const p = (async () => {
+      saving++;
+      saveEl.textContent = 'Сохранение…';
+      const ok = await run();
+      if (!ok) { saveFailed = true; anyFailed = true; }
+      if (--saving === 0) {
+        saveEl.textContent = saveFailed ? 'Не сохранено' : 'Сохранено';
+        saveFailed = false;
+      }
+      return ok;
+    })();
+    inflight.add(p);
+    p.finally(() => inflight.delete(p));
+    return p;
   };
   const update = (patch) => track(() => updateTask(t, patch));
   let closed = null;
@@ -2703,6 +2752,11 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     if (title.value.trim() || t.title.trim()) {
       saveTitleNow();
       saveDesc.flush();
+      if (touched && S.tasks.includes(t)) {
+        const pending = [...inflight];
+        if (pending.length) setSavedMark('task', 'saving');
+        Promise.all(pending).then(() => setSavedMark('task', anyFailed ? 'fail' : 'ok'));
+      }
       return (closed = Promise.resolve());
     }
     return (closed = finalizeTask());
@@ -2723,6 +2777,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     descDirty = false;
     const hasText = !!desc.textContent.trim();
     if (!hasText) { S.tasks = S.tasks.filter((x) => x !== t); refreshTasks(); updateCounts(); }
+    else setSavedMark('task', 'saving');
     try {
       const r = await api('POST', `/api/tasks/${t.id}/finalize`, body);
       if (r.deleted) {
@@ -2731,8 +2786,12 @@ function openTaskPanel(id, { justCreated = false } = {}) {
         if (body.description !== undefined) t.description = body.description;
         t.title = r.title;
         refreshTasks();
+        setSavedMark('task', anyFailed ? 'fail' : 'ok');
       }
-    } catch (e) { fail(e); }
+    } catch (e) {
+      fail(e);
+      if (hasText) setSavedMark('task', 'fail');
+    }
   };
   // Закрытие вкладки с открытой карточкой: один keepalive-запрос (название из описания или сохранение описания)
   panel.unloadFn = () => {
