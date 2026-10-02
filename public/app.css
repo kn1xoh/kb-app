@@ -1172,3 +1172,10 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
 .saved-mark.fail { color: var(--danger); }
 .saved-mark.ok { animation: saved-out .5s ease var(--fade-in, 3500ms) forwards; }
 @keyframes saved-out { to { opacity: 0; } }
+
+/* панель «Не сохранено … Повторить»: висит, пока правки не дойдут до сервера */
+.unsaved-bar { animation: none; }
+.unsaved-bar .toast-action { color: #fff; }
+.unsaved-bar .toast-action:disabled { opacity: .6; text-decoration: none; cursor: default; }
+@media (max-width: 860px), (pointer: coarse) { .unsaved-bar .toast-action { min-height: var(--tap); padding: 0 4px; } }
+.save-state.unsaved { color: var(--danger); }
