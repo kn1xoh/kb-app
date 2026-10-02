@@ -1103,7 +1103,3 @@ body:has(.bulk-bar) #toasts { bottom: calc(84px + env(safe-area-inset-bottom, 0p
 .pass-eye, .pass-eye:hover { background: none; width: 34px; height: 34px; }
 .pass-eye:hover { color: var(--fg); }
 .pass-eye[aria-pressed="true"] { color: var(--accent); }
-
-/* iPhone: поправка, если после клавиатуры видимая область меньше раскладки (--vv-gap ставит JS) */
-.shell { height: calc(100% - var(--vv-gap, 0px)); }
-.fab, #toasts { margin-bottom: var(--vv-gap, 0px); }
