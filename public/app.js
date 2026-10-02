@@ -3668,13 +3668,70 @@ async function openUsersDialog() {
     if (first) keepCaretVisible();
   };
   const later = () => { if (!raf) raf = requestAnimationFrame(sync); };
-  vv.addEventListener('resize', later);
-  vv.addEventListener('scroll', later);
+  // сдвиг видимой области догоняем сразу, без ожидания кадра — иначе экран успевает дёрнуться
+  const now = () => { if (raf) { cancelAnimationFrame(raf); raf = 0; } sync(); };
+  vv.addEventListener('resize', now);
+  vv.addEventListener('scroll', now);
   document.addEventListener('focusin', () => { later(); setTimeout(later, 350); });
   document.addEventListener('focusout', () => { later(); setTimeout(later, 350); });
   // курсор в редакторе не должен прятаться под панелью форматирования или за краем экрана
   document.addEventListener('input', (e) => { if (root.classList.contains('kb-open') && e.target.closest?.('.editor')) keepCaretVisible(); });
+
+  // Переход между названием и текстом при открытой клавиатуре. iPhone при смене поля сам прокручивает
+  // страницу к нему, и экран дёргается. Поэтому короткое касание другого поля обрабатываем сами:
+  // фокус без прокрутки и курсор в точку касания.
+  let tap = null;
+  document.addEventListener('touchstart', (e) => {
+    const t = e.touches[0];
+    tap = e.touches.length === 1 ? { x: t.clientX, y: t.clientY, at: Date.now() } : null;
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    const t = e.touches[0];
+    if (tap && Math.hypot(t.clientX - tap.x, t.clientY - tap.y) > 10) tap = null;
+  }, { passive: true });
+  document.addEventListener('touchend', (e) => {
+    const t = tap; tap = null;
+    if (!t || Date.now() - t.at > 450 || !root.classList.contains('kb-open')) return;
+    const field = e.target.closest?.('.page-title, .editor[contenteditable="true"]');
+    const active = document.activeElement;
+    if (!field || field === active || field.contains(active)) return;
+    e.preventDefault();
+    field.focus({ preventScroll: true });
+    if (field.tagName === 'TEXTAREA') {
+      const at = textareaOffsetAt(field, t.x, t.y);
+      field.setSelectionRange(at, at);
+    } else {
+      const r = document.caretRangeFromPoint?.(t.x, t.y);
+      const sel = getSelection();
+      sel.removeAllRanges();
+      if (r && field.contains(r.startContainer)) sel.addRange(r);
+      else { const end = document.createRange(); end.selectNodeContents(field); end.collapse(false); sel.addRange(end); }
+      // обычный клик тоже нужен: по нему отмечаются пункты чек-листа и т. п.
+      e.target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: t.x, clientY: t.y }));
+    }
+    later();
+  }, { passive: false });
 })();
+
+// Позиция символа в textarea под точкой касания: копия текста с теми же стилями поверх поля
+function textareaOffsetAt(ta, x, y) {
+  const cs = getComputedStyle(ta);
+  const r = ta.getBoundingClientRect();
+  const m = document.createElement('div');
+  ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing', 'lineHeight', 'paddingTop', 'paddingRight',
+    'paddingBottom', 'paddingLeft', 'borderTopWidth', 'borderLeftWidth', 'borderRightWidth', 'borderStyle', 'boxSizing',
+    'textTransform', 'textIndent', 'wordSpacing', 'tabSize'].forEach((p) => { m.style[p] = cs[p]; });
+  Object.assign(m.style, {
+    position: 'fixed', left: r.left + 'px', top: r.top - ta.scrollTop + 'px', width: r.width + 'px', margin: '0',
+    whiteSpace: 'pre-wrap', overflowWrap: 'break-word', borderColor: 'transparent', opacity: '0', zIndex: '2147483647',
+  });
+  m.textContent = ta.value + '\u200b';
+  document.body.appendChild(m);
+  const cr = document.caretRangeFromPoint?.(x, y);
+  const off = cr && m.contains(cr.startContainer) ? cr.startOffset : ta.value.length;
+  m.remove();
+  return Math.min(off, ta.value.length);
+}
 
 function keepCaretVisible() {
   const ed = document.activeElement?.closest?.('.editor');
