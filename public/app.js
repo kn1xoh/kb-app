@@ -4755,7 +4755,7 @@ async function openUsersDialog() {
   const reg = $('#reg-open', m);
   api('GET', '/api/admin/settings').then((st) => {
     reg.checked = st.registration === 'open';
-    $('#reg-hint', m).textContent = `Любой может создать аккаунт на странице входа. Не больше ${st.max_users} аккаунтов, с одного адреса — 3 в час`;
+    $('#reg-hint', m).textContent = `Любой может создать аккаунт на странице входа. Не больше ${st.max_users} аккаунтов; с одной сети — не больше 3 регистраций в час`;
   }).catch(fail);
   reg.onchange = async () => {
     try {

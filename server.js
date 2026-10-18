@@ -337,7 +337,7 @@ app.post('/api/register', async (req, res) => {
     const now = Date.now();
     const list = (regTries.get(req.ip) || []).filter((t) => now - t < 60 * 60e3);
     regTries.set(req.ip, list);
-    if (list.length >= 3) return httpError(res, 429, 'Слишком много регистраций с этого адреса. Попробуйте через час');
+    if (list.length >= 3) return httpError(res, 429, 'Слишком много регистраций из вашей сети. Попробуйте через час');
     if ((await countUsers()) >= MAX_USERS) return httpError(res, 403, 'Сейчас регистрация недоступна: достигнут лимит аккаунтов');
   }
   const err = await validateUserInput(b.email, b.name);
