@@ -3961,19 +3961,42 @@ document.addEventListener('keydown', (e) => {
 /* =========================================================
    Menus, modals, dialogs
    ========================================================= */
+// Всплывающее окно (position: fixed) едет вместе с кнопкой, когда прокручивают страницу или карточку;
+// если кнопка ушла за экран — окно закрывается. Возвращает функцию, снимающую слушатели.
+function followAnchor(box, anchor, place, close) {
+  const vv = window.visualViewport;
+  const onScroll = (e) => {
+    if (e && e.target instanceof Node && box.contains(e.target)) return; // прокрутка внутри самого окна
+    if (!anchor.isConnected) return close();
+    const r = anchor.getBoundingClientRect();
+    const top = vv ? vv.offsetTop : 0, h = vv ? vv.height : innerHeight;
+    if (r.bottom < top || r.top > top + h) return close();
+    place();
+  };
+  document.addEventListener('scroll', onScroll, { passive: true, capture: true });
+  vv?.addEventListener('scroll', onScroll);
+  return () => {
+    document.removeEventListener('scroll', onScroll, { capture: true });
+    vv?.removeEventListener('scroll', onScroll);
+  };
+}
 function showMenu(anchor, html, onPick) {
   closeMenus();
   const menu = document.createElement('div');
   menu.className = 'menu';
   menu.innerHTML = html;
   document.body.append(menu);
-  const r = anchor.getBoundingClientRect();
-  const mw = menu.offsetWidth, mh = menu.offsetHeight;
-  let left = Math.min(r.left, innerWidth - mw - 8);
-  let top = r.bottom + 4;
-  if (top + mh > innerHeight - 8) top = Math.max(8, r.top - mh - 4);
-  menu.style.left = Math.max(8, left) + 'px';
-  menu.style.top = top + 'px';
+  const place = () => {
+    const r = anchor.getBoundingClientRect();
+    const mw = menu.offsetWidth, mh = menu.offsetHeight;
+    let left = Math.min(r.left, innerWidth - mw - 8);
+    let top = r.bottom + 4;
+    if (top + mh > innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+    menu.style.left = Math.max(8, left) + 'px';
+    menu.style.top = top + 'px';
+  };
+  place();
+  const unfollow = followAnchor(menu, anchor, place, () => closeMenus());
   menu.addEventListener('click', (e) => {
     const b = e.target.closest('[data-m]');
     if (!b) return;
@@ -3983,7 +4006,7 @@ function showMenu(anchor, html, onPick) {
   setTimeout(() => menu.isConnected && document.addEventListener('mousedown', outside), 0);
   function outside(e) { if (!menu.contains(e.target)) closeMenus(); }
   // при закрытии меню снимаем и слушатель — иначе он закрывал бы окно, открытое из этого меню (календарь напоминания)
-  menu.cleanup = () => { menu.remove(); document.removeEventListener('mousedown', outside); };
+  menu.cleanup = () => { menu.remove(); document.removeEventListener('mousedown', outside); unfollow(); };
   $('button', menu)?.focus();
   return menu;
 }
@@ -4135,7 +4158,9 @@ function openDatePicker(anchor, value, onPick, opts = {}) {
     window.removeEventListener('keydown', onKey, true);
     document.removeEventListener('mousedown', outside);
     window.removeEventListener('resize', cleanup);
+    unfollow();
   }
+  const unfollow = followAnchor(box, anchor, place, cleanup);
   box.cleanup = cleanup;
   window.addEventListener('keydown', onKey, true);
   setTimeout(() => document.addEventListener('mousedown', outside), 0);
