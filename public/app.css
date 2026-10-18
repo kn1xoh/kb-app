@@ -196,9 +196,6 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 @media (hover: hover) { .menu button:hover { background: var(--hover); outline: none; } }
 .menu button.danger { color: var(--danger); }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
-.menu .seg { display: flex; gap: 4px; padding: 4px; }
-.menu .seg button { justify-content: center; padding: 6px; font-size: 13px; border: 1px solid var(--line); }
-.menu .seg button.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 .menu-label { font-size: 12px; color: var(--muted); padding: 6px 10px 0; }
 
 .main { min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
@@ -697,7 +694,7 @@ svg.i.filled { fill: currentColor; }
 }
 
 /* ---------- статусы задач ---------- */
-.modal.statuses { width: min(520px, calc(100% - 32px)); }
+.modal.settings-win { width: min(520px, calc(100% - 32px)); }
 .st-list { display: grid; gap: 6px; }
 .st-row { display: flex; align-items: center; gap: 6px; }
 .st-swatch {
@@ -801,9 +798,6 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
 .tasks-head .home-title h1 { flex: none; }
 /* шестерёнка настроек раздела — рядом с заголовком */
 .title-row { display: flex; align-items: center; gap: 6px; }
-.head-gear { width: 32px; height: 32px; color: var(--faint); }
-@media (hover: hover) { .head-gear:hover { color: var(--fg); } }
-.head-gear svg.i { width: 19px; height: 19px; }
 /* подпись блока в окне настроек — как подписи блоков в разделах */
 .set-block { display: grid; gap: 12px; }
 .set-block .field { max-width: 360px; }
@@ -917,7 +911,6 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
 
   /* меню, календарь, статусы */
   .menu button { padding: 11px 12px; }
-  .menu .seg button { padding: 9px 6px; }
   .datepicker .dp-nav { width: var(--tap); height: var(--tap); }
   .datepicker .dp-day { height: 40px; font-size: 14px; }
   .datepicker .dp-quick button { padding: 8px 10px; }
@@ -1076,8 +1069,6 @@ body:has(.modal) .fab { display: none; }
 /* поля в окне «Аккаунт» — на всю ширину окна, как остальные блоки */
 .set-block .field { max-width: none; }
 /* тема в меню пользователя — подписи в одну строку */
-.menu:has(.seg) { min-width: 280px; }
-.menu .seg button { white-space: nowrap; }
 /* звёздочка избранного по центру строки, а не над текстом */
 .task-row .t-title .mini-star, .card .c-title .mini-star { vertical-align: -2px; }
 /* уведомление не закрывает панель «Выбрано: …» */
@@ -1337,3 +1328,16 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
 .card.selected.tap-hl { border-color: var(--accent); background: var(--accent-soft); }
 .nav a.active.tap-hl, .tree-row.active.tap-hl, .fav-row.active.tap-hl { background-color: var(--accent-soft); }
 .tree-row, .nav a, .toc-row, .outline-row, .fav-row, .task-row, .card, .recent-card, .home-card, .hist-row { -webkit-tap-highlight-color: transparent; }
+
+/* ---------- окно «Настройки»: вкладки и тема ---------- */
+.set-tabs { display: flex; margin-top: -4px; }
+.set-tabs button { flex: 1; justify-content: center; min-width: 0; }
+.set-pane { display: grid; gap: 16px; }
+.theme-seg { display: flex; gap: 6px; margin-top: 8px; }
+.theme-seg button { flex: 1; min-width: 0; height: 36px; padding: 0 6px; border: 1px solid var(--line); border-radius: 8px; background: none; color: var(--fg); font: inherit; font-size: 14px; white-space: nowrap; }
+@media (hover: hover) { .theme-seg button:hover { background: var(--hover); } }
+.theme-seg button.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; font-weight: 500; }
+@media (max-width: 860px), (pointer: coarse) {
+  .theme-seg button { height: var(--tap); }
+  .set-tabs button { height: calc(var(--tap) - 6px); padding: 0 6px; }
+}

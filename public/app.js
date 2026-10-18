@@ -1518,7 +1518,6 @@ function renderNotesHome() {
         <div class="home-title">
           <div class="title-row">
             <h1>Заметки</h1>
-            <button class="icon-btn head-gear" id="notes-settings" title="Настройки заметок" aria-label="Настройки заметок">${icon('gear')}</button>
           </div>
           ${total ? `<p class="home-sub">${total} ${plural(total, 'заметка', 'заметки', 'заметок')}</p>` : ''}
         </div>
@@ -1558,7 +1557,6 @@ function renderNotesHome() {
       ${trashSection()}
     </div>`;
   $('#home-new').onclick = () => createPage(null);
-  $('#notes-settings').onclick = () => openNotesSettings();
   updateFab();
   paintSavedMark();
   bindTrash();
@@ -2735,7 +2733,6 @@ function renderTasks() {
         <div class="home-title">
           <div class="title-row">
             <h1>Задачи</h1>
-            <button class="icon-btn head-gear" id="task-settings" title="Настройки задач" aria-label="Настройки задач">${icon('gear')}</button>
           </div>
           <p class="home-sub" id="tasks-sub"></p>
         </div>
@@ -2758,7 +2755,6 @@ function renderTasks() {
     $('.tasks-wrap').classList.toggle('wide', S.taskView === 'board');
     renderTasksBody();
   });
-  $('#task-settings').onclick = () => openStatusesDialog();
   $('#task-new').onclick = createTask;
   $('#task-select').onclick = () => {
     S.taskSelect = !S.taskSelect;
@@ -4206,20 +4202,13 @@ function searchIndex(data, q) {
 }
 
 function openUserMenu(anchor) {
-  const cur = themeChoice();
-  const seg = (v, t) => `<button data-m="theme-${v}" data-keep="1" class="${cur === v ? 'on' : ''}">${t}</button>`;
   showMenu(anchor, `
-    <div class="menu-label">Тема</div>
-    <div class="seg">${seg('system', 'Как в системе')}${seg('light', 'Светлая')}${seg('dark', 'Тёмная')}</div>
-    <hr>
     <button data-m="account">${icon('user')}Аккаунт</button>
+    <button data-m="settings">${icon('gear')}Настройки</button>
     ${S.user.is_admin ? `<button data-m="users">${icon('users')}Пользователи</button>` : ''}
     <hr>
-    <button data-m="logout">${icon('logout')}Выйти</button>`, async (m, btn) => {
-    if (m.startsWith('theme-')) {
-      applyTheme(m.slice(6));
-      $$('.seg button', btn.closest('.menu')).forEach((b) => b.classList.toggle('on', b === btn));
-    }
+    <button data-m="logout">${icon('logout')}Выйти</button>`, async (m) => {
+    if (m === 'settings') openSettings();
     if (m === 'account') openAccountDialog();
     if (m === 'users') openUsersDialog();
     if (m === 'logout') {
@@ -4333,17 +4322,72 @@ function confirmTyped({ title, text, okText = 'Удалить' }) {
 /* =========================================================
    Статусы задач: добавить, переименовать, перекрасить, поменять порядок, удалить
    ========================================================= */
-function openNotesSettings() {
+/* =========================================================
+   Настройки: одно окно с вкладками «Общие» и по вкладке на раздел. Открывается из меню пользователя.
+   Новые общие настройки — блоками во вкладку «Общие», настройки нового раздела — новой вкладкой в SETTINGS_TABS
+   ========================================================= */
+const SETTINGS_TABS = [
+  { id: 'general', title: 'Общие', icon: 'gear', fill: fillGeneralSettings },
+  { id: 'notes', title: 'Заметки', icon: 'book', fill: fillNotesSettings },
+  { id: 'tasks', title: 'Задачи', icon: 'tasks', fill: fillTaskSettings },
+];
+
+function openSettings(tab = 'general') {
   const m = openModal(`
-    <h2>Настройки заметок</h2>
+    <h2>Настройки</h2>
+    <div class="segmented set-tabs" role="tablist">
+      ${SETTINGS_TABS.map((t) => `<button type="button" role="tab" data-tab="${t.id}">${icon(t.icon)}${t.title}</button>`).join('')}
+    </div>
+    <div class="set-pane" role="tabpanel"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn primary" data-close>Готово</button>
+    </div>`, 'settings-win');
+  const pane = $('.set-pane', m);
+  const show = (id) => {
+    const t = SETTINGS_TABS.find((x) => x.id === id) || SETTINGS_TABS[0];
+    $$('.set-tabs [data-tab]', m).forEach((b) => {
+      const on = b.dataset.tab === t.id;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', on);
+    });
+    pane.innerHTML = '';
+    t.fill(pane);
+  };
+  $('.set-tabs', m).onclick = (e) => {
+    const b = e.target.closest('[data-tab]');
+    if (b && !b.classList.contains('on')) show(b.dataset.tab);
+  };
+  show(tab);
+}
+
+function fillGeneralSettings(m) {
+  const opts = [['system', 'Как в системе'], ['light', 'Светлая'], ['dark', 'Тёмная']];
+  m.innerHTML = `
+    <h3 class="set-caption">Тема</h3>
+    <div class="theme-seg" role="radiogroup" aria-label="Тема">
+      ${opts.map(([v, t]) => `<button type="button" role="radio" data-theme="${v}">${t}</button>`).join('')}
+    </div>`;
+  const paint = () => $$('[data-theme]', m).forEach((b) => {
+    const on = b.dataset.theme === themeChoice();
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', on);
+  });
+  $('.theme-seg', m).onclick = (e) => {
+    const b = e.target.closest('[data-theme]');
+    if (!b) return;
+    applyTheme(b.dataset.theme);
+    paint();
+  };
+  paint();
+}
+
+function fillNotesSettings(m) {
+  m.innerHTML = `
     <h3 class="set-caption">Вид</h3>
     <label class="set-row">
       <span class="set-text"><b>Нумерация заметок</b><span>Номера 1, 1.1, 1.1.1 вместо значков в списке и левой панели</span></span>
       <input type="checkbox" class="switch" id="set-numbering" role="switch" ${S.numbering ? 'checked' : ''}>
-    </label>
-    <div class="modal-actions">
-      <button type="button" class="btn primary" data-close>Готово</button>
-    </div>`, 'settings');
+    </label>`;
   $('#set-numbering', m).onchange = (e) => {
     S.numbering = e.target.checked;
     store.set('kb-numbering', S.numbering);
@@ -4385,9 +4429,8 @@ function bindPushSetting(m) {
   });
 }
 
-function openStatusesDialog({ focus = null } = {}) {
-  const m = openModal(`
-    <h2>Настройки задач</h2>
+function fillTaskSettings(m) {
+  m.innerHTML = `
     <h3 class="set-caption">Статусы</h3>
     <p>Статусы — это колонки на доске и группы в списке. «${esc(statusOf('todo').name)}» нельзя удалить — в него переходят задачи удалённого статуса, — но можно переименовать и перекрасить. Готовую задачу завершают кнопкой в её карточке, она попадает в блок «Завершённые».</p>
     <div class="st-list" id="st-list"></div>
@@ -4400,10 +4443,7 @@ function openStatusesDialog({ focus = null } = {}) {
     <label class="set-row">
       <span class="set-text"><b>Напоминания на этом устройстве</b><span id="push-text"></span></span>
       <input type="checkbox" class="switch" id="set-push" role="switch">
-    </label>
-    <div class="modal-actions">
-      <button type="button" class="btn primary" data-close>Готово</button>
-    </div>`, 'statuses');
+    </label>`;
   const list = $('#st-list', m);
   let openPalette = null;
   bindPushSetting(m);
@@ -4534,7 +4574,6 @@ function openStatusesDialog({ focus = null } = {}) {
   };
 
   draw();
-  if (focus) focusName(focus, true);
 }
 
 // Имя и email (email — это логин). Для смены email просим текущий пароль: из него, как при входе,
