@@ -169,9 +169,14 @@ async function createUser({ email, name, isAdmin }, keys) {
 }
 const countUsers = async () => (await db.get('SELECT COUNT(*) AS n FROM users')).n;
 
+// Открытая регистрация: включает администратор в окне «Пользователи» (по умолчанию — только по приглашениям)
+const regOpen = async () => (await db.get("SELECT value FROM meta WHERE key = 'registration'"))?.value === 'open';
+// Сколько аккаунтов можно создать без приглашения (защита бесплатной базы от ботов)
+const MAX_USERS = Number(process.env.MAX_USERS) || 100;
+
 app.get('/api/me', async (req, res) => {
   const needsSetup = (await countUsers()) === 0;
-  res.json({ user: publicUser(req.user), needsSetup });
+  res.json({ user: publicUser(req.user), needsSetup, registration: (await regOpen()) ? 'open' : 'invite' });
 });
 
 // Первый шаг входа: соли, из которых браузер выводит ключи. legacy — старый аккаунт без шифрования
@@ -319,16 +324,29 @@ app.get('/api/invites/:token', async (req, res) => {
   res.json({ inviter: inv.inviter || '' });
 });
 
+// Регистрация по приглашению (token) или, если она открыта, без него
+const regTries = new Map(); // ip → время регистраций без приглашения за последний час
 app.post('/api/register', async (req, res) => {
   const b = req.body || {};
   const NO_INVITE = 'Приглашение не найдено: оно уже использовано или истёк срок. Попросите новое';
-  if (!(await liveInvite(b.token))) return httpError(res, 400, NO_INVITE);
+  const byInvite = !!b.token;
+  if (byInvite) {
+    if (!(await liveInvite(b.token))) return httpError(res, 400, NO_INVITE);
+  } else {
+    if (!(await regOpen())) return httpError(res, 403, 'Регистрация закрыта. Попросите приглашение у администратора');
+    const now = Date.now();
+    const list = (regTries.get(req.ip) || []).filter((t) => now - t < 60 * 60e3);
+    regTries.set(req.ip, list);
+    if (list.length >= 3) return httpError(res, 429, 'Слишком много регистраций с этого адреса. Попробуйте через час');
+    if ((await countUsers()) >= MAX_USERS) return httpError(res, 403, 'Сейчас регистрация недоступна: достигнут лимит аккаунтов');
+  }
   const err = await validateUserInput(b.email, b.name);
   if (err) return httpError(res, 400, err);
   const keys = readKeys(b);
   if (!keys) return httpError(res, 400, BAD_KEYS);
   // приглашение одноразовое: проверяем его ещё раз внутри транзакции
   const id = await db.tx(async () => {
+    if (!byInvite) return createUser({ email: b.email, name: b.name, isAdmin: false }, keys);
     const inv = await liveInvite(b.token);
     if (!inv) return null;
     const uid = await createUser({ email: b.email, name: b.name, isAdmin: false }, keys);
@@ -336,6 +354,7 @@ app.post('/api/register', async (req, res) => {
     return uid;
   });
   if (!id) return httpError(res, 400, NO_INVITE);
+  if (!byInvite) regTries.get(req.ip).push(Date.now());
   await createSession(res, req, id);
   res.json({ user: publicUser(await db.get('SELECT * FROM users WHERE id = ?', id)) });
 });
@@ -343,9 +362,27 @@ app.post('/api/register', async (req, res) => {
 // ---------- admin: пользователи и приглашения ----------
 // Администратор видит только список аккаунтов: ни паролей, ни заметок и задач других пользователей
 
+// Объём — сколько байт занимают в базе заметки и задачи пользователя (вместе с корзиной и историей
+// изменений). Тексты зашифрованы, поэтому считаем длину шифра — сколько места они реально занимают
+const B = (col) => `COALESCE(length(CAST(${col} AS BLOB)), 0)`;
 app.get('/api/admin/users', auth, admin, async (req, res) => {
-  res.json((await db.all('SELECT id, email, name, is_admin, created_at FROM users ORDER BY created_at'))
-    .map((u) => ({ ...u, is_admin: !!u.is_admin })));
+  const rows = await db.all(`SELECT u.id, u.email, u.name, u.is_admin, u.created_at,
+      COALESCE((SELECT SUM(${B('title')} + ${B('content')} + ${B('search_text')}) FROM pages WHERE user_id = u.id), 0)
+        + COALESCE((SELECT SUM(${B('title')} + ${B('body')}) FROM revisions WHERE user_id = u.id AND kind = 'page'), 0) AS notes_bytes,
+      COALESCE((SELECT SUM(${B('title')} + ${B('description')} + ${B('search_text')}) FROM tasks WHERE user_id = u.id), 0)
+        + COALESCE((SELECT SUM(${B('title')} + ${B('body')}) FROM revisions WHERE user_id = u.id AND kind = 'task'), 0) AS tasks_bytes
+    FROM users u ORDER BY u.created_at`);
+  res.json(rows.map((u) => ({ ...u, is_admin: !!u.is_admin, notes_bytes: Number(u.notes_bytes), tasks_bytes: Number(u.tasks_bytes) })));
+});
+
+app.get('/api/admin/settings', auth, admin, async (req, res) => {
+  res.json({ registration: (await regOpen()) ? 'open' : 'invite', max_users: MAX_USERS });
+});
+app.patch('/api/admin/settings', auth, admin, async (req, res) => {
+  const reg = req.body?.registration;
+  if (reg !== 'open' && reg !== 'invite') return httpError(res, 400, 'Неизвестное значение');
+  await db.run("INSERT INTO meta (key, value) VALUES ('registration', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", reg);
+  res.json({ registration: reg });
 });
 
 app.delete('/api/admin/users/:id', auth, admin, async (req, res) => {

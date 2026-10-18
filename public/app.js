@@ -616,7 +616,8 @@ async function boot() {
   }
   try {
     const invite = location.hash.match(/^#\/invite\/([\w-]+)/)?.[1];
-    const { user, needsSetup } = await api('GET', '/api/me');
+    const { user, needsSetup, registration } = await api('GET', '/api/me');
+    S.regOpen = registration === 'open';
     if (user?.encrypted && await Vault.load(user.id)) {
       if (invite) {
         history.replaceState(null, '', '/');
@@ -709,7 +710,9 @@ function checkNewPassword(p1, p2) {
 
 function renderAuth(setup = false) {
   if (setup) return renderNewAccount({ setup: true });
-  authScreen('Вход в аккаунт', 'Нет аккаунта? Попросите приглашение у администратора.', `
+  authScreen('Вход в аккаунт', S.regOpen
+    ? 'Нет аккаунта? <button type="button" class="link-btn" id="a-register">Зарегистрироваться</button>'
+    : 'Нет аккаунта? Попросите приглашение у администратора.', `
     <form id="auth-form" novalidate>
       ${authField('a-email', 'Email', 'email', 'username')}
       <label class="field"><span class="field-head">Пароль<button type="button" class="link-btn" id="a-forgot">Забыли пароль?</button></span>
@@ -719,6 +722,7 @@ function renderAuth(setup = false) {
     </form>`);
   $('#a-email').focus();
   $('#a-forgot').onclick = () => renderForgot($('#a-email').value);
+  $('#a-register')?.addEventListener('click', () => renderNewAccount({ open: true }));
   authSubmit(async (btn) => {
     const email = $('#a-email').value.trim();
     const password = $('#a-pass').value;
@@ -750,11 +754,14 @@ function enterApp(user) {
 }
 
 // Регистрация по приглашению или первый запуск (аккаунт администратора)
-function renderNewAccount({ setup = false, token = '', inviter = '' }) {
+// open — открытая регистрация со страницы входа (без приглашения)
+function renderNewAccount({ setup = false, token = '', inviter = '', open = false }) {
   const sub = setup
     ? 'Это первый запуск. Остальных вы пригласите по ссылке — пароли они придумают сами.'
-    : `${inviter ? `Вас пригласил ${esc(inviter)}. ` : ''}Придумайте пароль — его будете знать только вы.`;
-  authScreen(setup ? 'Создайте аккаунт администратора' : 'Добро пожаловать в Silo', sub, `
+    : open
+      ? 'Уже есть аккаунт? <button type="button" class="link-btn" id="a-to-login">Войти</button>'
+      : `${inviter ? `Вас пригласил ${esc(inviter)}. ` : ''}Придумайте пароль — его будете знать только вы.`;
+  authScreen(setup ? 'Создайте аккаунт администратора' : open ? 'Регистрация' : 'Добро пожаловать в Silo', sub, `
     <form id="auth-form" novalidate>
       ${authField('a-email', 'Email', 'email', 'username')}
       ${authField('a-name', 'Имя', 'text', 'name')}
@@ -764,6 +771,7 @@ function renderNewAccount({ setup = false, token = '', inviter = '' }) {
       <button class="btn primary" type="submit">Продолжить</button>
     </form>`);
   $('#a-email').focus();
+  $('#a-to-login')?.addEventListener('click', () => renderAuth());
   authSubmit(async (btn) => {
     const email = $('#a-email').value.trim();
     const name = $('#a-name').value.trim();
@@ -4694,11 +4702,21 @@ function openAccountDialog() {
   };
 }
 
+// Объём данных: 0 Б, 840 Б, 12 КБ, 3,4 МБ
+function fmtBytes(n) {
+  if (n < 1024) return `${n} Б`;
+  const [v, u] = n < 1024 ** 2 ? [n / 1024, 'КБ'] : [n / 1024 ** 2, 'МБ'];
+  return `${v.toLocaleString('ru-RU', { maximumFractionDigits: v < 10 ? 1 : 0 })} ${u}`;
+}
+
 // Пользователи и приглашения. Администратор не задаёт пароли и не видит чужие заметки и задачи
 async function openUsersDialog() {
   const m = openModal(`
     <h2>Пользователи</h2>
-    <p>Пригласите человека по ссылке — пароль он придумает сам. Заметки и задачи зашифрованы: их видит только владелец, даже администратор не может их прочитать.</p>
+    <p>Заметки и задачи зашифрованы: их видит только владелец, даже администратор не может их прочитать.</p>
+    <div class="set-caption">Регистрация</div>
+    <label class="set-row"><span class="set-text"><b>Открытая регистрация</b><span id="reg-hint">Любой может создать аккаунт на странице входа</span></span>
+      <input type="checkbox" class="switch" role="switch" id="reg-open"></label>
     <div class="set-caption">Пригласить</div>
     <form id="inv-form" class="inv-form">
       <input class="input" id="inv-label" maxlength="60" placeholder="Для кого, например «Дима» (видно только вам)" autocomplete="off">
@@ -4706,7 +4724,7 @@ async function openUsersDialog() {
     </form>
     <div id="inv-new"></div>
     <div id="inv-list"></div>
-    <div class="set-caption">Аккаунты</div>
+    <div class="set-caption">Аккаунты <span class="kids-n" id="users-n" hidden></span></div>
     <div class="table-wrap" id="users-list"><p class="muted">Загрузка…</p></div>
     <div class="modal-actions"><button type="button" class="btn" data-close>Закрыть</button></div>`, 'wide');
   const link = (token) => `${location.origin}/#/invite/${token}`;
@@ -4717,9 +4735,12 @@ async function openUsersDialog() {
   const load = async () => {
     try {
       const [users, invites] = await Promise.all([api('GET', '/api/admin/users'), api('GET', '/api/admin/invites')]);
+      const total = users.reduce((n, u) => n + u.notes_bytes + u.tasks_bytes, 0);
+      $('#users-n', m).hidden = false;
+      $('#users-n', m).textContent = `${users.length} · ${fmtBytes(total)}`;
       $('#users-list', m).innerHTML = `<table class="users-table"><tbody>${users.map((u) => `<tr>
-          <td><b style="font-weight:500">${esc(u.name || '—')}</b> ${u.is_admin ? '<span class="role">админ</span>' : ''}<br><small class="muted">${esc(u.email)}</small></td>
-          <td class="num">с ${esc(shortDate(u.created_at))}</td>
+          <td><b style="font-weight:500">${esc(u.name || '—')}</b> ${u.is_admin ? '<span class="role">админ</span>' : ''}<br><small class="muted">${esc(u.email)} · с ${esc(shortDate(u.created_at))}</small></td>
+          <td class="num size-cell"><b>${fmtBytes(u.notes_bytes + u.tasks_bytes)}</b><br><small>заметки ${fmtBytes(u.notes_bytes)} · задачи ${fmtBytes(u.tasks_bytes)}</small></td>
           <td style="text-align:right;width:1%">${u.id !== S.user.id ? `<button class="icon-btn" data-del="${u.id}" data-email="${esc(u.email)}" title="Удалить" aria-label="Удалить">${icon('trash')}</button>` : ''}</td>
         </tr>`).join('')}</tbody></table>`;
       $('#inv-list', m).innerHTML = invites.length ? `<table class="users-table"><tbody>${invites.map((i) => `<tr>
@@ -4731,6 +4752,18 @@ async function openUsersDialog() {
     } catch (e) { fail(e); }
   };
   load();
+  const reg = $('#reg-open', m);
+  api('GET', '/api/admin/settings').then((st) => {
+    reg.checked = st.registration === 'open';
+    $('#reg-hint', m).textContent = `Любой может создать аккаунт на странице входа. Не больше ${st.max_users} аккаунтов, с одного адреса — 3 в час`;
+  }).catch(fail);
+  reg.onchange = async () => {
+    try {
+      await api('PATCH', '/api/admin/settings', { registration: reg.checked ? 'open' : 'invite' });
+      S.regOpen = reg.checked;
+      toast(reg.checked ? 'Регистрация открыта' : 'Регистрация только по приглашениям');
+    } catch (err) { reg.checked = !reg.checked; fail(err); }
+  };
   $('#inv-form', m).onsubmit = async (e) => {
     e.preventDefault();
     try {
