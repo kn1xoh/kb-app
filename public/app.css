@@ -1341,3 +1341,16 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
 
 /* окно «Настройки»: линия только между разными группами настроек (перед второй и следующими подписями) */
 .set-pane > .set-caption ~ .set-caption { margin-top: 8px; padding-top: 20px; border-top: 1px solid var(--line); }
+
+/* ---------- название раздела в верхней полосе (телефон) ---------- */
+.bar-title { display: none; }
+@media (max-width: 860px) {
+  .topbar .bar-title {
+    display: block; flex: 1; min-width: 0; margin: 0 0 0 4px;
+    font: 700 23px/1.2 var(--font-ui); letter-spacing: -.015em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .home-head .title-row { display: none; }
+  .home-head .home-sub { margin-top: 0; }
+  .notes-home .home-head:not(:has(.home-sub)) { display: none; }
+}

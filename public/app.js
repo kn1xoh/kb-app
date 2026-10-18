@@ -1512,7 +1512,7 @@ function renderNotesHome() {
   const path = (p) => ancestors(p.id).map(titleOf).join(' / ');
   const total = S.pages.length;
   $('#main').innerHTML = `
-    ${topbar('', 'bare')}
+    ${topbar('<h1 class="bar-title">Заметки</h1>', 'bare')}
     <div class="notes-home">
       <div class="tasks-head home-head">
         <div class="home-title">
@@ -2727,7 +2727,7 @@ function renderTasks() {
   setActiveNav('tasks');
   renderTree();
   $('#main').innerHTML = `
-    ${topbar('', 'bare')}
+    ${topbar('<h1 class="bar-title">Задачи</h1>', 'bare')}
     <div class="tasks-wrap ${S.taskView === 'board' ? 'wide' : ''}">
       <div class="tasks-head home-head">
         <div class="home-title">
