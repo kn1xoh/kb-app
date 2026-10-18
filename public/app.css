@@ -986,7 +986,7 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
 .tp-complete svg.i { stroke-width: 2.4; }
 .tp-complete.reopen { color: var(--muted); border-color: var(--line); }
 .tp-complete.reopen:hover { color: var(--fg); background: var(--hover); }
-.tp-complete-row { display: flex; }
+.tp-complete-row { display: flex; justify-content: flex-end; }
 .done-state { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--accent); font-weight: 500; }
 .done-state svg.i { width: 16px; height: 16px; stroke-width: 2.4; }
 .done-state .muted { color: var(--muted); font-weight: 400; }
