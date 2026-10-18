@@ -3365,7 +3365,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   panel.setAttribute('aria-label', 'Задача');
   const completeBtn = done
     ? `<button class="btn tp-complete reopen" id="tp-complete">${icon('arrowUp')}Вернуть в работу</button>`
-    : `<button class="btn tp-complete" id="tp-complete">${icon('check')}Завершить</button>`;
+    : `<button class="btn tp-complete" id="tp-complete">Завершить</button>`;
   panel.innerHTML = `
     <div class="panel-body">
       <div class="tp-head">
