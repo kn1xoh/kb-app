@@ -117,11 +117,11 @@ function fullDateTime(s) {
   const date = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).replace(' г.', '');
   return `${date}, ${d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`;
 }
-// «14.09.2026 14:20» — по местному времени
+// «14.09.2026, 14:20» — по местному времени
 function numDateTime(s) {
   const d = toDate(s);
   const p = (n) => String(n).padStart(2, '0');
-  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}, ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 // «Сегодня, 1 окт» / «пт, 9 окт» / «пт, 9 окт 2027»
 function dueLong(d) {
