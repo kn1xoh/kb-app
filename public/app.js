@@ -2098,6 +2098,7 @@ function makeEditor(editor, onChange) {
       changed();
       refresh();
     });
+    if (!menu) return;
     menu.classList.add('block-menu');
     $('.on', menu)?.focus();
   });
@@ -2719,6 +2720,7 @@ function openFilterMenu(anchor) {
     menu.innerHTML = filterMenuHtml();
     ($(`[data-m="${focused}"]`, menu) || $('button', menu))?.focus();
   });
+  if (!menu) return;
   menu.classList.add('filter-menu');
 }
 
@@ -3980,10 +3982,21 @@ function followAnchor(box, anchor, place, close) {
     vv?.removeEventListener('scroll', onScroll);
   };
 }
+// Кнопка, открывшая окно (с id — сравниваем по id: кнопку «Фильтр» перерисовывают)
+const isAnchorEl = (anchor, el) => !!el && (anchor.contains(el) || (!!anchor.id && !!el.closest?.('#' + CSS.escape(anchor.id))));
+// Повторное нажатие на ту же кнопку закрывает открытое окно (возвращает true)
+function toggleOff(anchor, selector) {
+  const open = $(selector);
+  if (!open || !open.anchor || !isAnchorEl(open.anchor, anchor) && !isAnchorEl(anchor, open.anchor)) return false;
+  closeMenus();
+  return true;
+}
 function showMenu(anchor, html, onPick) {
+  if (toggleOff(anchor, '.menu')) return null;
   closeMenus();
   const menu = document.createElement('div');
   menu.className = 'menu';
+  menu.anchor = anchor;
   menu.innerHTML = html;
   document.body.append(menu);
   const place = () => {
@@ -4004,7 +4017,7 @@ function showMenu(anchor, html, onPick) {
     onPick(b.dataset.m, b);
   });
   setTimeout(() => menu.isConnected && document.addEventListener('mousedown', outside), 0);
-  function outside(e) { if (!menu.contains(e.target)) closeMenus(); }
+  function outside(e) { if (!menu.contains(e.target) && !isAnchorEl(anchor, e.target)) closeMenus(); }
   // при закрытии меню снимаем и слушатель — иначе он закрывал бы окно, открытое из этого меню (календарь напоминания)
   menu.cleanup = () => { menu.remove(); document.removeEventListener('mousedown', outside); unfollow(); };
   $('button', menu)?.focus();
@@ -4018,6 +4031,8 @@ function closeMenus() { $$('.menu').forEach((m) => (m.cleanup ? m.cleanup() : m.
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 function openDatePicker(anchor, value, onPick, opts = {}) {
   const { withTime = false, needTime = false, clearLabel = 'Убрать срок', label = 'Выбор срока' } = opts;
+  if (toggleOff(anchor, '.menu.datepicker')) return;
+  closeMenus();
   // со временем календарь не закрывается при выборе даты — закрывает кнопка «Готово» (или Enter в поле времени).
   // live: дата и время сохраняются сразу (срок задачи); иначе — только по «Готово» (напоминание)
   const stay = withTime;
@@ -4039,6 +4054,7 @@ function openDatePicker(anchor, value, onPick, opts = {}) {
 
   const box = document.createElement('div');
   box.className = 'menu datepicker';
+  box.anchor = anchor;
   box.setAttribute('role', 'dialog');
   box.setAttribute('aria-label', label);
   document.body.append(box);
@@ -4152,7 +4168,7 @@ function openDatePicker(anchor, value, onPick, opts = {}) {
   });
   // Esc закрывает только календарь, а не всю карточку задачи
   const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); cleanup(); anchor.focus(); } };
-  const outside = (e) => { if (!box.contains(e.target) && !anchor.contains(e.target)) cleanup(); };
+  const outside = (e) => { if (!box.contains(e.target) && !isAnchorEl(anchor, e.target)) cleanup(); };
   function cleanup() {
     box.remove();
     window.removeEventListener('keydown', onKey, true);
