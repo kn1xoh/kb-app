@@ -1226,7 +1226,7 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
 /* ===== копирование и удаление в карточке задачи ===== */
 #tp-copy.copied { color: var(--accent); }
 #tp-copy.copied svg.i { stroke-width: 2.4; }
-.tp-foot { display: flex; justify-content: center; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+.tp-foot { display: flex; justify-content: center; margin-top: 28px; }
 .del-link { background: none; border: 0; color: var(--danger); font: 500 14.5px/1 var(--font-ui); padding: 10px 16px; border-radius: 8px; cursor: pointer; }
 .del-link:hover { background: var(--danger-soft); }
 .del-link:focus-visible { outline: 2px solid var(--danger); outline-offset: 1px; }
