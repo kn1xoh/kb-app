@@ -573,7 +573,7 @@ window.addEventListener('online', () => Unsaved.retry(true));
 const quoted = (s, def) => (s && s.trim() ? `«${s.trim().length > 40 ? `${s.trim().slice(0, 40)}…` : s.trim()}»` : def);
 
 // ---------- state ----------
-const RECENT_DEFAULT = 3, RECENT_MIN = 1, RECENT_MAX = 10; // «Недавно изменённые»: сколько показывать
+const RECENT_DEFAULT = 2, RECENT_MIN = 1, RECENT_MAX = 10; // «Недавно изменённые»: сколько показывать
 try { localStorage.removeItem('kb-numbering'); } catch {} // нумерация заметок убрана (19 окт 2026)
 const S = {
   user: null,
