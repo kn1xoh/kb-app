@@ -284,6 +284,25 @@ db.init = async () => {
   await addColumn('tasks', 'reminded_at', 'TEXT');
   await db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_remind ON tasks(remind_at) WHERE reminded_at IS NULL AND remind_at IS NOT NULL');
 
+  // История изменений заметок и задач: копия названия и текста (как есть, зашифрованными) перед правкой.
+  // Новая таблица — существующие данные не меняются. kind — 'page' / 'task', body — текст заметки или описание задачи,
+  // saved_at — когда этот вариант был сохранён (updated_at записи на тот момент), created_at — когда сделана копия.
+  // Внешнего ключа на заметку/задачу нет намеренно: историю удалённых насовсем чистит сервер (dropOrphanHistory).
+  await db.exec(`
+  CREATE TABLE IF NOT EXISTS revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    saved_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_revisions_item ON revisions(kind, item_id, id);
+  CREATE INDEX IF NOT EXISTS idx_revisions_user ON revisions(user_id);
+  `);
+
   await db.run('DELETE FROM sessions WHERE expires_at < ?', Date.now());
 };
 

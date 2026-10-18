@@ -373,6 +373,63 @@ app.delete('/api/admin/invites/:id', auth, admin, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- история изменений ----------
+// Перед правкой названия или текста сервер копирует прежний вариант в revisions — как есть, зашифрованным
+// (сервер текст не видит и не сравнивает, сравнивает браузер). Чтобы не копировать каждое нажатие клавиши,
+// копия делается, только если предыдущей у этой записи нет дольше HISTORY_GAP_MIN минут: так получается
+// примерно одна версия на один заход. Перед восстановлением версии (restore) копия делается всегда.
+const HISTORY_GAP_MIN = 10;
+const HISTORY_DAYS = 30; // сколько хранится
+const HISTORY_FRESH_DAYS = 2; // за последние дни — все версии, раньше — по одной в день
+const HISTORY_MAX = 50; // не больше версий на одну заметку/задачу
+
+async function snapshot(kind, item, next, force) {
+  const bodyField = kind === 'page' ? 'content' : 'description';
+  const body = item[bodyField] || '';
+  if (item.title === next.title && body === (next[bodyField] || '')) return;
+  if (!item.title.trim() && !body) return;
+  // открытый текст (старые аккаунты до шифрования) в историю не копируем никогда
+  if (![item.title, body].every((v) => !v || isEnc(v))) return;
+  if (!force) {
+    // в первый заход (только что созданная запись) и чаще раза в HISTORY_GAP_MIN минут копию не делаем
+    const since = (await db.get("SELECT datetime('now', ?) AS t", `-${HISTORY_GAP_MIN} minutes`)).t;
+    if (item.created_at > since) return;
+    if (await db.get('SELECT 1 FROM revisions WHERE kind = ? AND item_id = ? AND created_at > ?', kind, item.id, since)) return;
+  }
+  await db.run('INSERT INTO revisions (user_id, kind, item_id, title, body, saved_at) VALUES (?, ?, ?, ?, ?, ?)',
+    item.user_id, kind, item.id, item.title, body, item.updated_at);
+  await db.run(`DELETE FROM revisions WHERE kind = ? AND item_id = ? AND id NOT IN
+    (SELECT id FROM revisions WHERE kind = ? AND item_id = ? ORDER BY id DESC LIMIT ${HISTORY_MAX})`, kind, item.id, kind, item.id);
+}
+
+// История заметок и задач, удалённых насовсем, удаляется вместе с ними
+async function dropOrphanHistory(userId) {
+  const who = userId ? 'user_id = ? AND' : '';
+  const args = userId ? [userId] : [];
+  await db.run(`DELETE FROM revisions WHERE ${who} kind = 'page' AND item_id NOT IN (SELECT id FROM pages)`, ...args);
+  await db.run(`DELETE FROM revisions WHERE ${who} kind = 'task' AND item_id NOT IN (SELECT id FROM tasks)`, ...args);
+}
+
+async function purgeHistory() {
+  await db.run("DELETE FROM revisions WHERE created_at < datetime('now', ?)", `-${HISTORY_DAYS} days`);
+  // старше пары дней — оставляем последнюю версию за каждый день
+  await db.run(`DELETE FROM revisions WHERE created_at < datetime('now', ?) AND id NOT IN
+    (SELECT MAX(id) FROM revisions WHERE created_at < datetime('now', ?) GROUP BY kind, item_id, date(created_at))`,
+  `-${HISTORY_FRESH_DAYS} days`, `-${HISTORY_FRESH_DAYS} days`);
+  await dropOrphanHistory();
+}
+
+async function listHistory(userId, kind, item) {
+  const bodyField = kind === 'page' ? 'content' : 'description';
+  const rows = await db.all(`SELECT id, title, body, saved_at FROM revisions WHERE user_id = ? AND kind = ? AND item_id = ?
+    ORDER BY id DESC`, userId, kind, item.id);
+  return {
+    days: HISTORY_DAYS,
+    current: { title: item.title, [bodyField]: item[bodyField], updated_at: item.updated_at },
+    items: rows.map((r) => ({ id: r.id, title: r.title, [bodyField]: r.body, saved_at: r.saved_at })),
+  };
+}
+
 // ---------- pages (notes tree) ----------
 
 // getPage видит только живые заметки; удалённые (в корзине) для него как будто не существуют
@@ -410,6 +467,7 @@ app.post('/api/pages', auth, async (req, res) => {
 async function savePage(page, body) {
   const title = body?.title !== undefined ? cutTitle(body.title) : page.title;
   const content = body?.content !== undefined ? clean(body.content) : page.content;
+  await snapshot('page', page, { title, content }, body?.restore === true);
   await db.run(`UPDATE pages SET title = ?, content = ?, search_text = ?, updated_at = datetime('now')
     WHERE id = ?`, title, content, searchText(title, content), page.id);
   return getPage(page.user_id, page.id);
@@ -420,6 +478,12 @@ app.patch('/api/pages/:id', auth, async (req, res) => {
   if (!page) return httpError(res, 404, 'Заметка не найдена');
   const updated = await savePage(page, req.body);
   res.json({ id: updated.id, title: updated.title, updated_at: updated.updated_at });
+});
+
+app.get('/api/pages/:id/history', auth, async (req, res) => {
+  const page = await getPage(req.user.id, req.params.id);
+  if (!page) return httpError(res, 404, 'Заметка не найдена');
+  res.json(await listHistory(req.user.id, 'page', page));
 });
 
 // Первая непустая строка текста заметки — для названия (не длиннее 80 символов, режем по слову)
@@ -449,6 +513,7 @@ async function finalizePage(page) {
     // подзаметки из корзины не должны пропасть вместе с родителем (ON DELETE CASCADE)
     await db.run('UPDATE pages SET parent_id = NULL WHERE parent_id = ?', page.id);
     await db.run('DELETE FROM pages WHERE id = ?', page.id);
+    await db.run("DELETE FROM revisions WHERE kind = 'page' AND item_id = ?", page.id);
     return { deleted: true };
   });
 }
@@ -579,6 +644,8 @@ function purgeBatch(userId, batchId) {
     // заметки, удалённые раньше отдельно, но лежавшие внутри — не теряем, а отвязываем от родителя
     await db.run(`UPDATE pages SET parent_id = NULL WHERE user_id = ? AND deleted_batch != ?
       AND parent_id IN (SELECT id FROM pages WHERE deleted_batch = ?)`, userId, batchId, batchId);
+    await db.run(`DELETE FROM revisions WHERE kind = 'page' AND user_id = ? AND item_id IN
+      (SELECT id FROM pages WHERE deleted_batch = ? AND user_id = ?)`, userId, batchId, userId);
     await db.run('DELETE FROM pages WHERE deleted_batch = ? AND user_id = ?', batchId, userId);
   });
 }
@@ -590,6 +657,7 @@ async function purgeExpired() {
   if (old.length) console.log(`Корзина: окончательно удалены записи старше ${TRASH_DAYS} дней (${old.length})`);
   const tasks = (await db.run("DELETE FROM tasks WHERE deleted_at < datetime('now', ?)", `-${TRASH_DAYS} days`)).changes;
   if (tasks) console.log(`Корзина задач: окончательно удалены задачи старше ${TRASH_DAYS} дней (${tasks})`);
+  await purgeHistory();
 }
 
 app.delete('/api/pages/:id', auth, async (req, res) => {
@@ -685,6 +753,7 @@ async function finalizeTask(t) {
   const line = firstLine(t.description);
   if (!line) {
     await db.run('DELETE FROM tasks WHERE id = ?', t.id);
+    await db.run("DELETE FROM revisions WHERE kind = 'task' AND item_id = ?", t.id);
     return { deleted: true };
   }
   await setTaskTitle(t, line);
@@ -737,6 +806,7 @@ app.patch('/api/tasks/:id', auth, async (req, res) => {
     next.due_time = b.due_time || null;
   }
   if (!next.due_date) next.due_time = null;
+  await snapshot('task', t, next, b.restore === true);
   if (b.remind_at !== undefined) {
     const at = b.remind_at ? sqlTime(b.remind_at) : null;
     if (at === undefined) return httpError(res, 400, 'Неверное время напоминания');
@@ -752,14 +822,22 @@ app.patch('/api/tasks/:id', auth, async (req, res) => {
   res.json(taskOut(await getTask(req.user.id, t.id)));
 });
 
+app.get('/api/tasks/:id/history', auth, async (req, res) => {
+  const t = await getTask(req.user.id, req.params.id);
+  if (!t) return httpError(res, 404, 'Задача не найдена');
+  res.json(await listHistory(req.user.id, 'task', t));
+});
+
 // Вызывается при закрытии карточки задачи без названия; можно сразу передать несохранённое описание
 app.post('/api/tasks/:id/finalize', auth, async (req, res) => {
   const t = await getTask(req.user.id, req.params.id);
   if (!t) return res.json({ deleted: true });
+  const old = { ...t };
   const b = req.body || {};
   if (b.title !== undefined) t.title = isEnc(b.title) ? cutTitle(b.title) : String(b.title).trim().slice(0, 300);
   if (b.description !== undefined) t.description = clean(b.description);
   if (b.title !== undefined || b.description !== undefined) {
+    await snapshot('task', old, t, false);
     await db.run(`UPDATE tasks SET title = ?, description = ?, search_text = ?, updated_at = datetime('now') WHERE id = ?`,
       t.title, t.description, searchText(t.title, t.description), t.id);
   }
@@ -959,11 +1037,13 @@ app.post('/api/trash/tasks/restore', auth, async (req, res) => {
 
 app.delete('/api/trash/tasks/:id', auth, async (req, res) => {
   await db.run('DELETE FROM tasks WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL', req.params.id, req.user.id);
+  await dropOrphanHistory(req.user.id);
   res.json({ ok: true });
 });
 
 app.delete('/api/trash/tasks', auth, async (req, res) => {
   const { changes } = await db.run('DELETE FROM tasks WHERE user_id = ? AND deleted_at IS NOT NULL', req.user.id);
+  await dropOrphanHistory(req.user.id);
   res.json({ ok: true, count: changes });
 });
 

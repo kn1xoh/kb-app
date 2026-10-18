@@ -213,14 +213,14 @@ function sealNow(body) {
 const HTML_TAGS = new Set(['P', 'BR', 'H1', 'H2', 'H3', 'STRONG', 'B', 'EM', 'I', 'U', 'S', 'STRIKE',
   'UL', 'OL', 'LI', 'BLOCKQUOTE', 'PRE', 'CODE', 'A', 'HR', 'DIV', 'SPAN']);
 const HTML_DROP = new Set(['SCRIPT', 'STYLE', 'TEXTAREA', 'OPTION', 'NOSCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'TEMPLATE', 'SVG', 'MATH']);
-function cleanHtml(html) {
+function cleanHtml(html, extraTags = null) {
   const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
   const walk = (el) => [...el.childNodes].forEach((n) => {
     if (n.nodeType === 3) return;
     if (n.nodeType !== 1) { n.remove(); return; }
     if (HTML_DROP.has(n.tagName)) { n.remove(); return; }
     walk(n);
-    if (!HTML_TAGS.has(n.tagName)) { n.replaceWith(...n.childNodes); return; }
+    if (!HTML_TAGS.has(n.tagName) && !extraTags?.has(n.tagName)) { n.replaceWith(...n.childNodes); return; }
     [...n.attributes].forEach((a) => {
       const keep = (n.tagName === 'A' && a.name === 'href') || (n.tagName === 'UL' && a.name === 'class')
         || (n.tagName === 'LI' && a.name === 'data-checked');
@@ -1354,10 +1354,12 @@ function openPageMenu(anchor, id) {
   showMenu(anchor, `
     <button data-m="add">${icon('plus')}Добавить подзаметку</button>
     <button data-m="move">${icon('move')}Переместить…</button>
+    <button data-m="history">${icon('clock')}История изменений</button>
     <hr>
     <button data-m="delete" class="danger">${icon('trash')}Удалить</button>`, (m) => {
     if (m === 'add') createPage(id);
     if (m === 'move') openMoveDialog(id);
+    if (m === 'history') openPageHistory(id);
     if (m === 'delete') deletePage(p);
   });
 }
@@ -3352,6 +3354,266 @@ async function copyToClipboard(text, html) {
   if (!ok) throw new Error('copy');
 }
 
+/* =========================================================
+   История изменений (заметки и задачи)
+   ========================================================= */
+// Сервер хранит прошлые варианты зашифрованными (см. snapshot в server.js), браузер их расшифровывает,
+// считает, сколько слов добавили/убрали, и подсвечивает разницу с текущим вариантом.
+
+// «Сегодня, 14:20» / «Вчера, 22:40» / «17 октября, 13:30» (год — если не текущий)
+function relDateTime(s) {
+  const d = toDate(s);
+  const time = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return `${histDay(s)}, ${time}`;
+}
+function histDay(s) {
+  const d = toDate(s);
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(new Date()) - day(d)) / 864e5);
+  if (diff === 0) return 'Сегодня';
+  if (diff === 1) return 'Вчера';
+  const opts = { day: 'numeric', month: 'long' };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+  return d.toLocaleDateString('ru-RU', opts).replace(' г.', '');
+}
+
+const histWords = (title, html) => `${title} ${htmlText(html)}`.toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+// Сколько слов добавили и убрали между двумя вариантами (порядок слов не учитываем — для подписи этого хватает)
+function histDelta(newer, older) {
+  const count = (words) => words.reduce((m, w) => m.set(w, (m.get(w) || 0) + 1), new Map());
+  const a = count(newer), b = count(older);
+  let plus = 0, minus = 0;
+  a.forEach((n, w) => { plus += Math.max(0, n - (b.get(w) || 0)); });
+  b.forEach((n, w) => { minus += Math.max(0, n - (a.get(w) || 0)); });
+  return { plus, minus };
+}
+function histDeltaHtml({ plus, minus }) {
+  if (!plus && !minus) return 'без изменений в словах';
+  const last = minus || plus;
+  const word = plural(last, 'слово', 'слова', 'слов');
+  const parts = [];
+  if (plus) parts.push(`<span class="plus">+${plus}${minus ? '' : ` ${word}`}</span>`);
+  if (minus) parts.push(`<span class="minus">−${minus} ${word}</span>`);
+  return parts.join(' · ');
+}
+
+// Разметка → куски: теги отдельно, текст — словами и знаками препинания (пробел после — вместе с ними,
+// иначе одинаковые пробелы «склеивают» разные слова и подсветка превращается в мешанину)
+function histTokens(html) {
+  const out = [];
+  String(html || '').split(/(<[^>]*>)/).forEach((part) => {
+    if (!part) return;
+    if (part[0] === '<') { out.push({ tag: true, v: part }); return; }
+    (part.match(/&[#\w]+;\s*|[\p{L}\p{N}]+\s*|[^\p{L}\p{N}\s&]+\s*|\s+/gu) || []).forEach((w) => out.push({ tag: false, v: w }));
+  });
+  return out;
+}
+const HIST_DIFF_LIMIT = 4e6; // больше — не подсвечиваем (слишком долго считать)
+// Разница двух вариантов: 'eq' — есть в обоих, 'old' — есть только в выбранной версии (вернётся при восстановлении),
+// 'cur' — есть только в текущей (пропадёт). null — слишком большие изменения
+function histDiff(oldToks, curToks) {
+  const same = (x, y) => x.tag === y.tag && x.v === y.v;
+  let s = 0;
+  while (s < oldToks.length && s < curToks.length && same(oldToks[s], curToks[s])) s++;
+  let e = 0;
+  while (e < oldToks.length - s && e < curToks.length - s && same(oldToks[oldToks.length - 1 - e], curToks[curToks.length - 1 - e])) e++;
+  const A = oldToks.slice(s, oldToks.length - e), B = curToks.slice(s, curToks.length - e);
+  const n = A.length, m = B.length;
+  if (n * m > HIST_DIFF_LIMIT) return null;
+  // длина общей части (LCS) с конца — потом проходим с начала
+  const w = m + 1;
+  const L = new Int32Array((n + 1) * w);
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      L[i * w + j] = same(A[i], B[j]) ? L[(i + 1) * w + j + 1] + 1 : Math.max(L[(i + 1) * w + j], L[i * w + j + 1]);
+    }
+  }
+  const ops = oldToks.slice(0, s).map((t) => ['eq', t]);
+  let i = 0, j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && same(A[i], B[j])) { ops.push(['eq', A[i]]); i++; j++; }
+    else if (j < m && (i === n || L[i * w + j + 1] >= L[(i + 1) * w + j])) { ops.push(['cur', B[j]]); j++; }
+    else { ops.push(['old', A[i]]); i++; }
+  }
+  oldToks.slice(oldToks.length - e).forEach((t) => ops.push(['eq', t]));
+  return ops;
+}
+// Склеиваем в разметку выбранной версии: её теги остаются, слова текущей версии вставляются зачёркнутыми.
+// Внутри каждого изменённого куска сначала всё зачёркнутое, потом всё добавленное — читается целыми фразами
+function histRender(ops) {
+  let out = '', open = null, run = [];
+  const close = () => { if (open) { out += `</${open}>`; open = null; } };
+  const put = (kind, v) => {
+    if (kind === 'eq') { close(); out += v; return; }
+    const want = kind === 'old' ? 'ins' : 'del';
+    if (open !== want) { close(); out += `<${want}>`; open = want; }
+    out += v;
+  };
+  const flush = () => {
+    run.filter(([op]) => op === 'cur').forEach(([, t]) => put('cur', t.v));
+    run.filter(([op]) => op === 'old').forEach(([, t]) => put('old', t.v));
+    run = [];
+  };
+  ops.forEach(([op, t]) => {
+    if (t.tag && op === 'cur') return; // теги текущей версии не нужны — показываем разметку выбранной
+    if (!t.tag && op !== 'eq') { run.push([op, t]); return; }
+    flush();
+    if (t.tag) { close(); out += t.v; } else put('eq', t.v);
+  });
+  flush();
+  close();
+  return cleanHtml(out, new Set(['INS', 'DEL']));
+}
+
+// kind: 'page' / 'task'. onRestore(version, current) — сохранить выбранную версию (возвращает промис)
+async function openHistory(kind, id, { onRestore }) {
+  const bodyField = kind === 'page' ? 'content' : 'description';
+  let data;
+  try {
+    data = await api('GET', `/api/${kind === 'page' ? 'pages' : 'tasks'}/${id}/history`, undefined, { fresh: true });
+  } catch (e) { fail(e); return; }
+  const cur = { now: true, title: data.current.title || '', body: data.current[bodyField] || '', at: data.current.updated_at };
+  // одинаковые подряд (например, копия перед восстановлением того же текста) показываем один раз
+  const versions = [cur];
+  data.items.forEach((r) => {
+    const v = { id: r.id, title: r.title || '', body: r[bodyField] || '', at: r.saved_at };
+    const prev = versions[versions.length - 1];
+    if (prev.title !== v.title || prev.body !== v.body) versions.push(v);
+  });
+  versions.forEach((v, i) => {
+    v.words = histWords(v.title, v.body);
+    const older = versions[i + 1];
+    v.sub = older ? histDeltaHtml(histDelta(v.words, histWords(older.title, older.body))) : '';
+  });
+  const phone = () => matchMedia('(max-width: 600px)').matches;
+  let sel = versions.length > 1 ? 1 : 0;
+
+  const what = kind === 'page' ? 'заметку' : 'задачу';
+  const listHtml = () => {
+    let day = '';
+    return versions.map((v, i) => {
+      let cap = '';
+      if (!v.now) {
+        const d = histDay(v.at);
+        if (d !== day) { day = d; cap = `<div class="hist-cap">${esc(d)}</div>`; }
+      }
+      const time = v.now ? 'Сейчас' : toDate(v.at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      const sub = v.now
+        ? `текущая версия${v.sub ? ` · ${v.sub}` : ''}`
+        : (v.sub || 'самая ранняя версия');
+      return `${cap}<button type="button" class="hist-row ${i === sel ? 'on' : ''}" data-i="${i}" title="${esc(fullDateTime(v.at))}">
+        <span class="hr-time">${time}</span><span class="hr-sub">${sub}</span><span class="hr-go">${icon('chevron')}</span></button>`;
+    }).join('');
+  };
+
+  const m = openModal(`
+    <div class="hist-head">
+      <button type="button" class="hist-back">${icon('chevron')}Все версии</button>
+      <h2>История изменений</h2>
+      <span class="hist-of"></span>
+      <button type="button" class="done-btn" data-close>Готово</button>
+    </div>
+    <div class="hist-body">
+      <div class="hist-list"></div>
+      <div class="hist-view">
+        <div class="hist-legend"><span><i class="lg-add"></i>вернётся при восстановлении</span><span><i class="lg-del"></i>пропадёт</span></div>
+        <div class="hist-doc"></div>
+        <div class="hist-actions">
+          <button type="button" class="btn" id="hist-copy">${icon('copy')}Копировать</button>
+          <span class="grow"></span>
+          <button type="button" class="btn close-x" data-close>Закрыть</button>
+          <button type="button" class="btn primary" id="hist-restore">Восстановить эту версию</button>
+        </div>
+      </div>
+    </div>`, 'history');
+  $('.hist-of', m).textContent = cur.title || 'Без названия';
+  m.dataset.step = phone() ? 'list' : 'view';
+  const list = $('.hist-list', m);
+  const doc = $('.hist-doc', m);
+
+  const paint = () => {
+    list.innerHTML = listHtml();
+    const v = versions[sel];
+    const only = versions.length === 1;
+    $('.hist-legend', m).hidden = v.now || only;
+    $('#hist-restore', m).hidden = v.now;
+    if (only) {
+      doc.innerHTML = `<p class="hist-empty">Прошлых версий пока нет. Silo сохраняет прежний вариант, когда вы снова меняете ${what}, — хранятся ${data.days} дней.</p>`;
+      $('#hist-copy', m).hidden = true;
+      return;
+    }
+    $('#hist-copy', m).hidden = false;
+    let titleHtml = esc(v.title || 'Без названия'), bodyHtml = v.body, note = '';
+    if (!v.now) {
+      const t = histDiff(histTokens(esc(v.title)), histTokens(esc(cur.title)));
+      const b = histDiff(histTokens(v.body), histTokens(cur.body));
+      if (t) titleHtml = histRender(t) || titleHtml;
+      if (b) bodyHtml = histRender(b);
+      else note = '<p class="hist-note">Изменений слишком много, чтобы подсветить, — показан текст этой версии.</p>';
+      $('.hist-legend', m).hidden = !b;
+    }
+    doc.innerHTML = `${note}<h1 class="hd-title">${titleHtml}</h1><div class="editor">${bodyHtml || '<p class="hist-none">Текста нет</p>'}</div>`;
+    doc.scrollTop = 0;
+  };
+  paint();
+
+  list.addEventListener('click', (e) => {
+    const row = e.target.closest('.hist-row');
+    if (!row) return;
+    sel = Number(row.dataset.i);
+    m.dataset.step = 'view';
+    paint();
+  });
+  $('.hist-back', m).onclick = () => { m.dataset.step = 'list'; };
+  $('#hist-copy', m).onclick = (e) => {
+    const v = versions[sel];
+    const box = document.createElement('div');
+    box.innerHTML = v.body;
+    copyEntry(e.currentTarget, v.title, box);
+  };
+  $('#hist-restore', m).onclick = async (e) => {
+    const v = versions[sel];
+    e.currentTarget.disabled = true;
+    try {
+      await onRestore({ title: v.title || cur.title, body: v.body }, { title: cur.title, body: cur.body });
+      closeModal(m);
+    } catch (err) {
+      e.currentTarget.disabled = false;
+      fail(err);
+    }
+  };
+}
+
+// Задача: карточка открывается заново уже с восстановленным текстом. Перед этим поля старой карточки
+// приводим к новому варианту — иначе при закрытии она отправила бы прежнее название обратно
+async function restoreTaskVersion(t, v, prev, undo = false) {
+  const r = await api('PATCH', `/api/tasks/${t.id}`, { title: v.title, description: v.body, restore: true });
+  Object.assign(t, r);
+  refreshTasks();
+  const open = $('.panel #tp-fav')?.dataset.id === String(t.id);
+  if (open) {
+    // правки этой карточки уже сохранены (см. #tp-history) — при закрытии ей останется отправить только название
+    $('.panel #tp-title').value = t.title;
+    openTaskPanel(t.id);
+  }
+  if (!undo) toast('Версия восстановлена', '', { label: 'Отменить', fn: () => restoreTaskVersion(t, prev, v, true).catch(fail) });
+}
+
+// Восстановление: обычная правка с пометкой restore — сервер сначала сохранит текущий вариант в историю,
+// поэтому восстановление можно отменить (в уведомлении «Отменить» возвращаем то, что было)
+async function restorePageVersion(id, v, prev, undo = false) {
+  const r = await api('PATCH', `/api/pages/${id}`, { title: v.title, content: v.body, restore: true });
+  const p = pageById(id);
+  if (p) { p.title = r.title; p.updated_at = r.updated_at; }
+  if (S.page?.id === id) { S.page = null; route(); } else { renderTree?.(); }
+  if (!undo) toast('Версия восстановлена', '', { label: 'Отменить', fn: () => restorePageVersion(id, prev, v, true).catch(fail) });
+}
+async function openPageHistory(id) {
+  if (S.page?.id === id) await flushPageSave();
+  if (Unsaved.items.has(`page:${id}`)) { toast('Есть неотправленные изменения — историю можно открыть, когда они дойдут до сервера', 'error'); return; }
+  openHistory('page', id, { onRestore: (v, prev) => restorePageVersion(id, v, prev) });
+}
+
 function openTaskPanel(id, { justCreated = false } = {}) {
   const t = taskById(id);
   if (!t) return;
@@ -3390,6 +3652,8 @@ function openTaskPanel(id, { justCreated = false } = {}) {
         <button type="button" class="date-btn" id="tp-remind"></button>
         <span>Создана</span>
         <span class="prop-text" title="${esc(ago(t.created_at))}">${esc(numDateTime(t.created_at))}</span>
+        <span>Изменения</span>
+        <button type="button" class="date-btn hist-prop" id="tp-history" title="История изменений">${icon('clock')}<span></span>${icon('chevron')}</button>
       </div>
       <div class="tp-complete-row">${completeBtn}</div>
       <div class="editor-box">
@@ -3414,6 +3678,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
       const ok = await run();
       if (!ok) { saveFailed = true; anyFailed = true; }
       if (--saving === 0) {
+        paintChanged();
         const label = saveFailed ? Unsaved.label() : 'Сохранено';
         saveEl.textContent = shortSave(label);
         saveEl.classList.toggle('unsaved', label === 'Не сохранено');
@@ -3427,6 +3692,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     return p;
   };
   const update = (patch) => track(() => updateTask(t, patch));
+  const paintChanged = () => { const el = $('#tp-history span', panel); if (el && t.updated_at) el.textContent = relDateTime(t.updated_at); };
   let closed = null;
   const close = () => {
     if (closed) return closed;
@@ -3532,6 +3798,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     remindBtn.title = t.remind_at ? `${pending ? 'Напомню' : 'Напоминание было'}: ${remindWhen(t)}` : '';
   };
   paintDue();
+  paintChanged();
   const setDue = async (date, time) => {
     if (date === (t.due_date || null) && (time || null) === (t.due_time || null)) return;
     await update(duePatch(t, date, time));
@@ -3584,6 +3851,14 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   };
   // Копирование названия и описания: в буфер кладём и простой текст, и HTML (для Word / Google Docs)
   $('#tp-copy', panel).onclick = (e) => copyEntry(e.currentTarget, $('#tp-title', panel).value, $('#tp-desc', panel));
+  // История изменений: сначала дожидаемся сохранения, чтобы «Сейчас» в истории было тем, что на экране
+  $('#tp-history', panel).onclick = async () => {
+    await saveAll();
+    await Promise.all([...inflight]);
+    if (!S.tasks.includes(t)) return;
+    if (Unsaved.items.has(`task:${t.id}`)) { toast('Есть неотправленные изменения — историю можно открыть, когда они дойдут до сервера', 'error'); return; }
+    openHistory('task', t.id, { onRestore: (v, prev) => restoreTaskVersion(t, v, prev) });
+  };
   // Только что созданная задача — курсор сразу в название
   // на телефоне курсор ставим только в новую задачу — иначе при каждом открытии выезжает клавиатура
   const touch = matchMedia('(pointer: coarse)').matches;
