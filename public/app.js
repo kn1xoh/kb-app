@@ -1517,7 +1517,6 @@ function renderNotesHome() {
     if (kids && !closed) walk(p.id, depth + 1);
   });
   walk(null, 0);
-  const path = (p) => ancestors(p.id).map(titleOf).join(' / ');
   const total = S.pages.length;
   $('#main').innerHTML = `
     ${topbar('<h1 class="bar-title">Заметки</h1>', 'bare')}
@@ -1534,11 +1533,14 @@ function renderNotesHome() {
       ${total ? `
       <section class="recent">
         <div class="toc-head"><h3>Недавно изменённые</h3></div>
-        <div class="recent-cards">${recent.map((p) => `<a class="recent-card" href="#/notes/${p.id}">
-          <span class="rc-top">${noteIcon(p.id)}<span class="rc-time">${ago(p.updated_at)}</span></span>
-          <span class="rc-title ${p.title.trim() ? '' : 'untitled'}">${esc(titleOf(p))}</span>
-          <span class="rc-path">${path(p) ? esc(path(p)) : 'Верхний уровень'}</span>
-        </a>`).join('')}</div>
+        <div class="recent-list">${recent.map((p) => { const up = ancestors(p.id).map(titleOf); return `<a class="recent-card" href="#/notes/${p.id}"${up.length ? ` title="${esc(up.join(' › '))}"` : ''}>
+          ${noteIcon(p.id)}
+          <span class="rc-main">
+            <span class="rc-title ${p.title.trim() ? '' : 'untitled'}">${esc(titleOf(p))}</span>
+            ${up.length ? `<span class="rc-loc">${icon('notes')}${up.length > 1 ? `<span class="rc-anc">${esc(up.slice(0, -1).join(' › '))} ›</span>` : ''}<span class="rc-par">${esc(up.at(-1))}</span></span>` : ''}
+          </span>
+          <span class="rc-time">${ago(p.updated_at)}</span>
+        </a>`; }).join('')}</div>
       </section>
       <section class="all-notes">
       <div class="toc-head">
