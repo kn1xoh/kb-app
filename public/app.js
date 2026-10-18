@@ -3120,13 +3120,13 @@ function openTaskPanel(id, { justCreated = false } = {}) {
   panel.innerHTML = `
     <div class="panel-body">
       <div class="tp-head">
-        <textarea class="page-title" id="tp-title" rows="1" maxlength="300" placeholder="Название задачи">${esc(t.title)}</textarea>
         <div class="tp-actions">
           <span class="save-state tp-save" aria-live="polite"></span>
           <button class="icon-btn fav-btn" id="tp-fav" data-id="${t.id}"></button>
           <button class="icon-btn" id="tp-delete" title="Удалить задачу" aria-label="Удалить задачу">${icon('trash')}</button>
           <button class="done-btn" id="tp-close" title="Закрыть (Esc)">Готово</button>
         </div>
+        <textarea class="page-title" id="tp-title" rows="1" maxlength="300" placeholder="Название задачи">${esc(t.title)}</textarea>
       </div>
       <div class="props">
         <span>Статус</span>
