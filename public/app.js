@@ -50,6 +50,8 @@ const ICONS = {
   link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
   hr: 'M4 12h16',
   clear: 'M5 6V4h13v2M11 4 8 20M6 20h5M15 14l5 5M20 14l-5 5',
+  undo: 'M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11',
+  redo: 'M15 14l5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13',
   move: 'M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20',
   home: 'M4 11l8-7 8 7M6 9.5V20h12V9.5',
   pencil: 'M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4',
@@ -1838,6 +1840,7 @@ function makeEditor(editor, onChange) {
     <button class="icon-btn" data-cmd="italic" title="Курсив (Ctrl+I)" aria-label="Курсив">${icon('italic')}</button>
     <button class="icon-btn" data-cmd="underline" title="Подчёркнутый (Ctrl+U)" aria-label="Подчёркнутый">${icon('underline')}</button>
     <button class="icon-btn" data-cmd="strikeThrough" title="Зачёркнутый" aria-label="Зачёркнутый">${icon('strike')}</button>
+    <div class="tb-hist"><i class="tb-sep"></i><button class="icon-btn off" data-hist="-1" title="Отменить (Ctrl+Z)" aria-label="Отменить" aria-disabled="true">${icon('undo')}</button><button class="icon-btn off" data-hist="1" title="Вернуть (Ctrl+Shift+Z)" aria-label="Вернуть" aria-disabled="true">${icon('redo')}</button></div>
     <span class="sep"></span>
     <button class="icon-btn" data-cmd="insertUnorderedList" title="Маркированный список" aria-label="Маркированный список">${icon('list')}</button>
     <button class="icon-btn" data-cmd="insertOrderedList" title="Нумерованный список" aria-label="Нумерованный список">${icon('ol')}</button>
@@ -1849,9 +1852,12 @@ function makeEditor(editor, onChange) {
     <button class="icon-btn" data-cmd="insertHorizontalRule" title="Разделитель" aria-label="Разделитель">${icon('hr')}</button>
     <button class="icon-btn" data-cmd="clear" title="Очистить форматирование" aria-label="Очистить форматирование">${icon('clear')}</button>`;
   const BLOCKS = { p: 'Текст', h1: 'Заголовок 1', h2: 'Заголовок 2', h3: 'Заголовок 3' };
+  // на узком экране в первой строке ещё «Отменить / Вернуть» — подпись заголовка короче
+  const BLOCKS_SHORT = { p: 'Текст', h1: 'Заг. 1', h2: 'Заг. 2', h3: 'Заг. 3' };
+  const narrow = matchMedia('(max-width: 600px)');
   let curBlock = 'p';
 
-  const changed = () => { markEmpty(); onChange(); };
+  const changed = () => { markEmpty(); record(); onChange(); };
   const blockOf = () => {
     const sel = getSelection();
     if (!sel.rangeCount || !editor.contains(sel.anchorNode)) return null;
@@ -1884,7 +1890,7 @@ function makeEditor(editor, onChange) {
     $('[data-cmd="quote"]', bar).classList.toggle('on', !!blk?.closest('blockquote'));
     $('[data-cmd="code"]', bar).classList.toggle('on', !!blk?.closest('pre'));
     curBlock = blk?.closest('h1,h2,h3')?.tagName.toLowerCase() || 'p';
-    $('[data-block-label]', bar).textContent = BLOCKS[curBlock];
+    $('[data-block-label]', bar).textContent = (narrow.matches ? BLOCKS_SHORT : BLOCKS)[curBlock];
   };
   document.addEventListener('selectionchange', refresh);
 
@@ -1950,6 +1956,90 @@ function makeEditor(editor, onChange) {
       getSelection().addRange(r);
     }
   });
+  /* ---------- своя история правок: «Отменить» / «Вернуть» ----------
+     Штатная отмена браузера теряется после наших правок DOM (Enter в цитате, коде и т.п.), поэтому храним
+     снимки HTML + курсор. Набор текста — шаг на слово (или до паузы 1 с), удаление подряд — один шаг. */
+  const H = { stack: [], i: -1, kind: '', at: 0, wordEnd: false, next: null };
+  const histBtns = $$('[data-hist]', bar);
+  const snap = () => ({ html: editor.innerHTML, sel: selPath() });
+  function selPath() {
+    const sel = getSelection();
+    if (!sel.rangeCount || !editor.contains(sel.anchorNode) || !editor.contains(sel.focusNode)) return null;
+    return { a: nodePath(editor, sel.anchorNode), ao: sel.anchorOffset, f: nodePath(editor, sel.focusNode), fo: sel.focusOffset };
+  }
+  function paintHist() {
+    histBtns.forEach((b) => {
+      const off = b.dataset.hist === '-1' ? H.i <= 0 : H.i >= H.stack.length - 1;
+      b.classList.toggle('off', off);
+      b.setAttribute('aria-disabled', off ? 'true' : 'false');
+    });
+  }
+  function record() {
+    const next = H.next || { kind: 'other', data: '' };
+    H.next = null;
+    const html = editor.innerHTML;
+    if (H.i < 0) { H.stack = [snap()]; H.i = 0; }
+    if (html === H.stack[H.i].html) return;
+    const now = Date.now();
+    const merge = H.i > 0 && next.kind !== 'other' && next.kind === H.kind && now - H.at < 1000
+      && !(next.kind === 'type' && H.wordEnd && !/^\s/.test(next.data));
+    H.stack.length = H.i + 1;
+    if (merge) H.stack[H.i] = snap();
+    else { H.stack.push(snap()); H.i++; }
+    if (H.stack.length > 101) { H.stack.shift(); H.i--; }
+    H.kind = next.kind;
+    H.at = now;
+    H.wordEnd = next.kind === 'type' && /[\s.,!?;:)»]$/.test(next.data);
+    paintHist();
+  }
+  function goHist(d) {
+    const j = H.i + d;
+    if (j < 0 || j >= H.stack.length) return;
+    H.i = j;
+    H.kind = '';
+    const s = H.stack[j];
+    const active = document.activeElement === editor;
+    editor.innerHTML = s.html;
+    markEmpty();
+    if (active && s.sel) {
+      const a = nodeAt(editor, s.sel.a);
+      const f = nodeAt(editor, s.sel.f);
+      if (a && f) {
+        try { getSelection().setBaseAndExtent(a, Math.min(s.sel.ao, nodeLen(a)), f, Math.min(s.sel.fo, nodeLen(f))); } catch { /* ignore */ }
+      } else placeCaretEnd(editor);
+      keepCaretVisible();
+    }
+    paintHist();
+    refresh();
+    onChange();
+  }
+  H.stack = [snap()]; H.i = 0;
+  histBtns.forEach((b) => b.addEventListener('click', () => { if (!b.classList.contains('off')) goHist(Number(b.dataset.hist)); }));
+  // пустое поле при фокусе получает <p><br></p> — это ещё не правка
+  editor.addEventListener('focus', () => { if (H.i === 0 && H.stack.length === 1) H.stack[0] = snap(); });
+  // курсор у текущего шага — чтобы отмена удаления вернула его туда, где начали стирать
+  document.addEventListener('selectionchange', () => {
+    if (!editor.isConnected || H.i < 0 || !editor.contains(getSelection().anchorNode)) return;
+    if (editor.innerHTML === H.stack[H.i].html) H.stack[H.i].sel = selPath();
+  });
+  editor.addEventListener('beforeinput', (e) => {
+    if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') { e.preventDefault(); goHist(e.inputType === 'historyUndo' ? -1 : 1); return; }
+    const collapsed = getSelection().isCollapsed;
+    const t = e.inputType;
+    const kind = !collapsed ? 'other'
+      : (t === 'insertText' || t === 'insertCompositionText' || t === 'insertReplacementText') ? 'type'
+      : t.startsWith('delete') ? 'del' : 'other';
+    H.next = { kind, data: e.data || '' };
+  });
+  editor.addEventListener('keydown', (e) => {
+    H.next = null;
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    if (e.code === 'KeyZ' || e.code === 'KeyY') {
+      e.preventDefault();
+      goHist(e.code === 'KeyY' || e.shiftKey ? 1 : -1);
+    }
+  });
+
   editor.addEventListener('input', (e) => {
     // жирный/курсив/ссылка не переносятся на новую пустую строку
     if (e.inputType === 'insertParagraph') {
@@ -2078,6 +2168,19 @@ function serializeEditor(editor) {
   const html = clone.innerHTML.trim();
   return html === '<p><br></p>' ? '' : html;
 }
+
+// путь к узлу внутри редактора (номера детей) — чтобы вернуть курсор после замены HTML
+function nodePath(root, node) {
+  const path = [];
+  while (node && node !== root) { path.unshift([...node.parentNode.childNodes].indexOf(node)); node = node.parentNode; }
+  return node === root ? path : null;
+}
+function nodeAt(root, path) {
+  let n = root;
+  for (const i of path || []) { n = n?.childNodes[i]; if (!n) return null; }
+  return path ? n : null;
+}
+const nodeLen = (n) => (n.nodeType === 3 ? n.data.length : n.childNodes.length);
 
 function placeCaretEnd(el) {
   el.focus();

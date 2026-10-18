@@ -1190,3 +1190,18 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
 .unsaved-bar.done svg.i { width: 14px; height: 14px; stroke-width: 2.6; margin-right: 6px; vertical-align: -2px; }
 .save-state.local { color: var(--warn); }
 .saved-mark.local { color: var(--warn); }
+
+/* ---------- «Отменить» / «Вернуть» в панели форматирования (вариант A2: справа) ---------- */
+.tb-hist { display: flex; align-items: center; gap: 1px; order: 99; }
+.tb-hist .tb-sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+@media (max-width: 860px), (pointer: coarse) {
+  .tb-hist { gap: 2px; }
+  .tb-hist .icon-btn { width: var(--tap); }
+  .tb-hist .tb-sep { height: 22px; margin: 0 2px; }
+}
+/* телефон: справа в первой строке */
+@media (max-width: 600px) {
+  .tb-hist { order: 0; margin-left: auto; }
+  .tb-hist .tb-sep { display: none; }
+  .tb-block { min-width: 0; }
+}
