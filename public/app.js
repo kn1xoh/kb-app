@@ -4793,4 +4793,34 @@ function keepCaretVisible() {
   else if (rect.top < top) box.scrollTop -= top - rect.top;
 }
 
+// Телефон: подсветка строки/карточки только при нажатии, а не при прокрутке.
+// Настоящий :hover в CSS включён только для мыши (@media (hover: hover)), здесь — замена для пальца:
+// держат палец неподвижно ~120 мс или коротко нажали — строка подсвечивается (класс .tap-hl),
+// палец сдвинулся (прокрутка) — подсветки нет.
+(() => {
+  const ITEMS = '.task-row, .card, .outline-row, .toc-row, .recent-card, .home-card, .fav-row, .tree-row, .nav a, .hist-row';
+  let cur = null, x = 0, y = 0, timer = 0;
+  const off = (el) => el?.classList.remove('tap-hl');
+  const cancel = () => { clearTimeout(timer); off(cur); cur = null; };
+  document.addEventListener('touchstart', (e) => {
+    cancel();
+    if (e.touches.length !== 1) return;
+    const el = e.target.closest?.(ITEMS);
+    if (!el || e.target.closest('input, textarea, [contenteditable="true"]')) return;
+    cur = el; x = e.touches[0].clientX; y = e.touches[0].clientY;
+    timer = setTimeout(() => cur?.classList.add('tap-hl'), 120);
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (cur && Math.hypot(e.touches[0].clientX - x, e.touches[0].clientY - y) > 10) cancel();
+  }, { passive: true });
+  document.addEventListener('touchcancel', cancel, { passive: true });
+  document.addEventListener('scroll', () => { if (cur) cancel(); }, { passive: true, capture: true });
+  document.addEventListener('touchend', () => {
+    if (!cur) return;
+    const el = cur; cur = null; clearTimeout(timer);
+    el.classList.add('tap-hl');
+    setTimeout(() => off(el), 300);
+  }, { passive: true });
+})();
+
 boot();
