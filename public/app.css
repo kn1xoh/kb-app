@@ -1218,3 +1218,7 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
 .fav-row.drop-after::after { bottom: -1px; }
 .fav-row.dragging { opacity: .4; }
 .task-row[draggable="true"] { -webkit-user-drag: element; }
+/* телефон: без системного предпросмотра ссылки и выделения текста при долгом нажатии */
+.fav-row { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+#tree.touch-sorting { touch-action: none; }
+.fav-row.touch-lift { opacity: 1; z-index: 2; background: var(--bg); box-shadow: 0 6px 18px rgba(0,0,0,.16); transition: box-shadow .15s; }

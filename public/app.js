@@ -1094,6 +1094,7 @@ const FAV_SOURCES = '.fav-row, .outline-row, .toc-row, .recent-card, #tasks-body
 document.addEventListener('dragstart', (e) => {
   const el = e.target.closest?.(FAV_SOURCES);
   favDrag = null;
+  if (favTouch) { e.preventDefault(); return; } // на телефоне строки избранного двигает своя перестановка
   if (!el) return;
   if (el.classList.contains('fav-row')) {
     favDrag = el.dataset.favTask
@@ -1153,6 +1154,74 @@ function setupFavDnD() {
     ids.splice(at < 0 ? ids.length : at, 0, id);
     setFavOrder(kind, ids, id);
   });
+  setupFavTouchSort(tree);
+}
+
+/* Телефон: долгое нажатие на строку избранного (~0.35 с) → строка «поднимается»,
+   ведёте палец вверх/вниз → отпускаете. Системный предпросмотр ссылки отключён (CSS + contextmenu). */
+let favTouch = null;
+function setupFavTouchSort(tree) {
+  const HOLD_MS = 350;
+  const cancel = () => {
+    if (!favTouch) return;
+    clearTimeout(favTouch.timer);
+    favTouch.row.classList.remove('touch-lift');
+    favTouch.row.style.transform = '';
+    tree.classList.remove('touch-sorting');
+    clearFavDrop();
+    favTouch = null;
+  };
+  tree.addEventListener('contextmenu', (e) => { if (e.target.closest('.fav-row')) e.preventDefault(); });
+  tree.addEventListener('touchstart', (e) => {
+    cancel();
+    const row = e.target.closest('.fav-row');
+    if (!row || e.touches.length > 1 || e.target.closest('[data-unfav]')) return;
+    const t = e.touches[0];
+    favTouch = { row, x: t.clientX, y: t.clientY, active: false };
+    favTouch.timer = setTimeout(() => {
+      if (!favTouch) return;
+      favTouch.active = true;
+      row.classList.add('touch-lift', 'dragging');
+      tree.classList.add('touch-sorting');
+      navigator.vibrate?.(10);
+    }, HOLD_MS);
+  }, { passive: true });
+  tree.addEventListener('touchmove', (e) => {
+    if (!favTouch) return;
+    const t = e.touches[0];
+    if (!favTouch.active) {
+      // палец сдвинулся до срабатывания — это прокрутка, а не перестановка
+      if (Math.hypot(t.clientX - favTouch.x, t.clientY - favTouch.y) > 10) cancel();
+      return;
+    }
+    e.preventDefault();
+    favTouch.lastY = t.clientY;
+    favTouch.row.style.transform = `translateY(${t.clientY - favTouch.y}px)`;
+    $$('.fav-row', tree).forEach((r) => r.classList.remove('drop-before', 'drop-after'));
+    const { rows, before } = favDropPlace({ clientY: t.clientY });
+    if (before) before.classList.add('drop-before');
+    else if (rows.length) rows[rows.length - 1].classList.add('drop-after');
+  }, { passive: false });
+  const finish = (e) => {
+    if (!favTouch) return;
+    const { row, active, lastY } = favTouch;
+    if (!active) return cancel();
+    e.preventDefault(); // не открывать заметку/задачу после перестановки
+    const before = lastY == null ? null : favDropPlace({ clientY: lastY }).before;
+    const moved = lastY != null;
+    row.classList.remove('dragging');
+    cancel();
+    if (!moved) return;
+    const kind = row.dataset.favTask ? 'tasks' : 'pages';
+    const id = Number(row.dataset.favTask || row.dataset.favPage);
+    const ids = favList(kind).map((x) => x.id).filter((x) => x !== id);
+    const at = before ? ids.indexOf(Number(before.dataset.favTask || before.dataset.favPage)) : -1;
+    ids.splice(at < 0 ? ids.length : at, 0, id);
+    const old = favList(kind).map((x) => x.id);
+    if (ids.join() !== old.join()) setFavOrder(kind, ids, id);
+  };
+  tree.addEventListener('touchend', finish, { passive: false });
+  tree.addEventListener('touchcancel', () => cancel());
 }
 
 async function setFavOrder(kind, ids, movedId) {
