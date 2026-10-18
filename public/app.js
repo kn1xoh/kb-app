@@ -117,6 +117,12 @@ function fullDateTime(s) {
   const date = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).replace(' г.', '');
   return `${date}, ${d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`;
 }
+// «14.09.2026 14:20» — по местному времени
+function numDateTime(s) {
+  const d = toDate(s);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 // «Сегодня, 1 окт» / «пт, 9 окт» / «пт, 9 окт 2027»
 function dueLong(d) {
   const dt = new Date(d + 'T00:00');
@@ -1756,7 +1762,7 @@ async function flushPageSave() {
     const r = await api('PATCH', `/api/pages/${id}`, data);
     const p = pageById(id);
     if (p) { p.updated_at = r.updated_at; }
-    if (S.page?.id === id) { const meta = $('#page-changed'); if (meta) meta.textContent = `Изменено ${ago(r.updated_at)}`; }
+    if (S.page?.id === id) { const meta = $('#page-changed'); if (meta) meta.textContent = `${$('#page-created') ? 'изменена' : 'Изменено'} ${ago(r.updated_at)}`; }
     Unsaved.saved(`page:${id}`, data);
     setSaveState(Unsaved.items.has(`page:${id}`) ? Unsaved.label() : 'Сохранено');
   } catch (e) {
@@ -1864,7 +1870,7 @@ async function openPage(id) {
     ${topbar('<nav class="crumbs" id="crumbs"></nav><span class="save-state" id="save-state"></span><button class="icon-btn fav-btn" id="page-fav"></button><button class="icon-btn" id="page-more" aria-label="Действия с заметкой">' + icon('more') + '</button><button class="done-btn" id="page-done" title="Закрыть заметку">Готово</button>')}
     <article class="page">
       <textarea class="page-title" id="page-title" rows="1" placeholder="Без названия" maxlength="300">${esc(page.title)}</textarea>
-      <div class="page-meta"><span id="page-num"></span><span id="page-changed">Изменено ${ago(page.updated_at)}</span></div>
+      <div class="page-meta"><span id="page-num"></span>${page.created_at ? `<span id="page-created" title="${esc(ago(page.created_at))}">Создана ${numDateTime(page.created_at)} · </span>` : ''}<span id="page-changed">${page.created_at ? 'изменена' : 'Изменено'} ${ago(page.updated_at)}</span></div>
       <div id="toolbar-slot"></div>
       <div class="editor" id="editor" contenteditable="true" data-placeholder="Начните писать…">${page.content}</div>
       <section class="subpages" id="subpages"></section>
@@ -3311,7 +3317,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
         <span>Напомнить</span>
         <button type="button" class="date-btn" id="tp-remind"></button>
         <span>Создана</span>
-        <span class="prop-text" title="${esc(ago(t.created_at))}">${esc(fullDateTime(t.created_at))}</span>
+        <span class="prop-text" title="${esc(ago(t.created_at))}">${esc(numDateTime(t.created_at))}</span>
       </div>
       <div class="tp-complete-row">${completeBtn}</div>
       <div class="editor-box">
