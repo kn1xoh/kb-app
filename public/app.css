@@ -415,7 +415,7 @@ svg.i.flip { transform: scaleX(-1); }
 .datepicker .dp-clear { justify-content: flex-start; gap: 8px; padding: 8px 10px; color: var(--muted); border-top: 1px solid var(--line); border-radius: 0 0 6px 6px; }
 .datepicker .dp-clear svg.i { width: 16px; height: 16px; }
 
-.panel .editor { font: 15px/1.65 var(--font-ui); min-height: 200px; padding: 14px 16px; cursor: text; }
+.panel .editor { font: 15px/1.65 var(--font-ui); min-height: calc(2 * 1.65em + 28px); padding: 14px 16px; cursor: text; }
 .panel .editor p { margin: 0 0 .55em; }
 .panel .editor h1, .panel .editor h2, .panel .editor h3 { font-family: var(--font-ui); letter-spacing: -.005em; margin: 1.1em 0 .4em; }
 .panel .editor h1 { font-size: 1.45em; }
@@ -1354,3 +1354,6 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
   .home-head .home-sub { margin-top: 0; }
   .notes-home .home-head:not(:has(.home-sub)) { display: none; }
 }
+
+/* описание задачи: высота по тексту, без пустоты снизу */
+.panel .editor > :last-child { margin-bottom: 0; }
