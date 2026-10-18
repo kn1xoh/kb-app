@@ -719,10 +719,7 @@ svg.i.filled { fill: currentColor; }
 /* «Добавить статус» — сразу под списком статусов */
 .st-add-row { margin-top: 8px; }
 .st-add-row .btn { padding-left: 8px; color: var(--accent); }
-.st-default {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; padding-top: 16px;
-  border-top: 1px solid var(--line); font-size: 14px;
-}
+.st-default { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 14px; }
 .st-default label { color: var(--muted); }
 .st-default select { flex: 1; min-width: 180px; max-width: none; height: 36px; font: inherit; }
 
@@ -1341,3 +1338,6 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
   .theme-seg button { height: var(--tap); }
   .set-tabs button { height: calc(var(--tap) - 6px); padding: 0 6px; }
 }
+
+/* окно «Настройки»: линия только между разными группами настроек (перед второй и следующими подписями) */
+.set-pane > .set-caption ~ .set-caption { margin-top: 8px; padding-top: 20px; border-top: 1px solid var(--line); }

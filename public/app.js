@@ -1560,7 +1560,7 @@ function renderNotesHome() {
   updateFab();
   paintSavedMark();
   bindTrash();
-  if (S.trash === null) loadTrash();
+  if (S.trash === null && S.trashOpen) loadTrash();
   const outline = $('#outline');
   if (!outline) return;
   if (!S.selectMode) enablePageDnD(outline, '.outline-row', { axis: 'y' });
@@ -1659,7 +1659,7 @@ function trashSection() {
   const head = `
     <div class="toc-head">
       <h3><button class="trash-toggle ${S.trashOpen ? 'open' : ''}" id="trash-toggle" aria-expanded="${S.trashOpen}">
-        ${icon('chevron')}<span>Недавно удалённые</span>${n ? `<span class="trash-n">${n}</span>` : ''}</button></h3>
+        ${icon('chevron')}<span>Недавно удалённые</span>${S.trashOpen && n ? `<span class="trash-n">${n}</span>` : ''}</button></h3>
       ${S.trashOpen && n ? '<button class="btn ghost" id="trash-clear">Очистить</button>' : ''}
     </div>`;
   if (!S.trashOpen) return `<section class="trash">${head}</section>`;
@@ -3016,7 +3016,7 @@ function taskTrashSection() {
   const head = `
     <div class="toc-head">
       <h3><button class="trash-toggle ${S.taskTrashOpen ? 'open' : ''}" data-fold="trash" aria-expanded="${S.taskTrashOpen}">
-        ${icon('chevron')}<span>Недавно удалённые</span>${n ? `<span class="trash-n">${n}</span>` : ''}</button></h3>
+        ${icon('chevron')}<span>Недавно удалённые</span>${S.taskTrashOpen && n ? `<span class="trash-n">${n}</span>` : ''}</button></h3>
       ${S.taskTrashOpen && n ? '<button class="btn ghost" data-ttrash="clear">Очистить</button>' : ''}
     </div>`;
   const wrap = (inner) => `<section class="task-group fold trash">${head}${inner}</section>`;
