@@ -1233,3 +1233,11 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
 @media (max-width: 860px), (pointer: coarse) {
   .del-link { height: var(--tap); font-size: 16px; }
 }
+
+/* ===== заметка: копирование, крошки на телефоне под верхней полосой ===== */
+#page-copy.copied { color: var(--accent); }
+#page-copy.copied svg.i { stroke-width: 2.4; }
+.topbar #save-state { margin-left: auto; }
+#crumbs-slot:empty { display: none; }
+#crumbs-slot .crumbs { flex-wrap: wrap; row-gap: 2px; overflow: visible; margin: 0 0 6px -6px; font-size: 13.5px; }
+#crumbs-slot .crumbs a { max-width: 100%; }

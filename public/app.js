@@ -1868,8 +1868,9 @@ async function openPage(id) {
   saveExpanded();
   renderTree();
   $('#main').innerHTML = `
-    ${topbar('<nav class="crumbs" id="crumbs"></nav><span class="save-state" id="save-state"></span><button class="icon-btn fav-btn" id="page-fav"></button><button class="icon-btn" id="page-more" aria-label="Действия с заметкой">' + icon('more') + '</button><button class="done-btn" id="page-done" title="Закрыть заметку">Готово</button>')}
+    ${topbar('<nav class="crumbs" id="crumbs"></nav><span class="save-state" id="save-state"></span><button class="icon-btn fav-btn" id="page-fav"></button><button class="icon-btn" id="page-copy" title="Копировать название и текст" aria-label="Копировать название и текст">' + icon('copy') + '</button><button class="icon-btn" id="page-more" aria-label="Действия с заметкой">' + icon('more') + '</button><button class="done-btn" id="page-done" title="Закрыть заметку">Готово</button>')}
     <article class="page">
+      <div id="crumbs-slot"></div>
       <textarea class="page-title" id="page-title" rows="1" placeholder="Без названия" maxlength="300">${esc(page.title)}</textarea>
       <div class="page-meta"><span id="page-num"></span>${page.created_at ? `<span id="page-created" title="${esc(ago(page.created_at))}">Создана ${numDateTime(page.created_at)} · </span>` : ''}<span id="page-changed">${page.created_at ? 'изменена' : 'Изменено'} ${ago(page.updated_at)}</span></div>
       <div id="toolbar-slot"></div>
@@ -1896,6 +1897,7 @@ async function openPage(id) {
   const editor = $('#editor');
   $('#toolbar-slot').replaceWith(makeEditor(editor, () => queuePageSave({ content: serializeEditor(editor) })));
   $('#page-more').onclick = (e) => openPageMenu(e.currentTarget, id);
+  $('#page-copy').onclick = (e) => copyEntry(e.currentTarget, title.value, editor);
   // «Готово» — на уровень выше: к родительской заметке или к списку заметок
   $('#page-done').onclick = () => {
     const parent = (pageById(id) || S.page).parent_id;
@@ -1910,9 +1912,16 @@ async function openPage(id) {
 // «Крошки»: если путь не помещается, средние уровни прячутся в «…» (по клику — список скрытых).
 // Скрываем по порядку: сначала самые старшие предки, потом родителя, потом «Заметки». Текущая заметка видна всегда.
 let crumbsRO = null;
+// На телефоне крошки — отдельной строкой под верхней полосой (над названием), целиком, с переносом;
+// на компьютере — в верхней полосе, как раньше
+const crumbsBelow = matchMedia('(max-width: 860px)');
+crumbsBelow.addEventListener('change', () => renderCrumbs());
 function renderCrumbs() {
   const el = $('#crumbs');
   if (!el || !S.page) return;
+  const slot = $('#crumbs-slot'), bar = $('.topbar');
+  if (crumbsBelow.matches && slot) { if (el.parentElement !== slot) slot.append(el); }
+  else if (bar && el.parentElement !== bar) $('.menu-toggle', bar).after(el);
   const num = $('#page-num');
   if (num) num.textContent = S.numbering ? `Заметка ${pageNumbers().get(S.page.id)} · ` : '';
   const items = [{ href: '#/notes', title: 'Заметки', root: true },
@@ -3303,6 +3312,23 @@ function editorPlainText(editor) {
   return text.replace(/\u00a0/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// Копирование названия и текста (задача, заметка): в буфер — простой текст и HTML (для Word / Google Docs).
+// Значок на 1,5 с становится галочкой, тост «Скопировано»
+function copyEntry(btn, title, editor) {
+  const name = title.trim();
+  const body = editorPlainText(editor);
+  if (!name && !body) { toast('Нечего копировать'); return; }
+  const text = [name, body].filter(Boolean).join('\n\n');
+  const html = (name ? `<h2>${esc(name)}</h2>` : '') + (body ? editor.innerHTML : '');
+  copyToClipboard(text, html).then(() => {
+    btn.innerHTML = icon('check');
+    btn.classList.add('copied');
+    clearTimeout(btn.copyTimer);
+    btn.copyTimer = setTimeout(() => { btn.innerHTML = icon('copy'); btn.classList.remove('copied'); }, 1500);
+    toast('Скопировано');
+  }, () => toast('Не удалось скопировать', 'error'));
+}
+
 // write() вызывается сразу по нажатию (без await до него) — иначе Safari не даёт доступ к буферу
 async function copyToClipboard(text, html) {
   try {
@@ -3557,22 +3583,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     if (S.tasks.includes(t)) deleteTasks([t.id]);
   };
   // Копирование названия и описания: в буфер кладём и простой текст, и HTML (для Word / Google Docs)
-  $('#tp-copy', panel).onclick = (e) => {
-    const btn = e.currentTarget;
-    const name = $('#tp-title', panel).value.trim();
-    const desc = $('#tp-desc', panel);
-    const body = editorPlainText(desc);
-    if (!name && !body) { toast('Нечего копировать'); return; }
-    const text = [name, body].filter(Boolean).join('\n\n');
-    const html = (name ? `<h2>${esc(name)}</h2>` : '') + (body ? desc.innerHTML : '');
-    copyToClipboard(text, html).then(() => {
-      btn.innerHTML = icon('check');
-      btn.classList.add('copied');
-      clearTimeout(btn.copyTimer);
-      btn.copyTimer = setTimeout(() => { btn.innerHTML = icon('copy'); btn.classList.remove('copied'); }, 1500);
-      toast('Скопировано');
-    }, () => toast('Не удалось скопировать', 'error'));
-  };
+  $('#tp-copy', panel).onclick = (e) => copyEntry(e.currentTarget, $('#tp-title', panel).value, $('#tp-desc', panel));
   // Только что созданная задача — курсор сразу в название
   // на телефоне курсор ставим только в новую задачу — иначе при каждом открытии выезжает клавиатура
   const touch = matchMedia('(pointer: coarse)').matches;
