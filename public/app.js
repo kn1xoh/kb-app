@@ -1908,11 +1908,8 @@ async function openPage(id) {
   $('#toolbar-slot').replaceWith(makeEditor(editor, () => queuePageSave({ content: serializeEditor(editor) })));
   $('#page-more').onclick = (e) => openPageMenu(e.currentTarget, id);
   $('#page-copy').onclick = (e) => copyEntry(e.currentTarget, title.value, editor);
-  // «Готово» — на уровень выше: к родительской заметке или к списку заметок
-  $('#page-done').onclick = () => {
-    const parent = (pageById(id) || S.page).parent_id;
-    location.hash = parent && pageById(parent) ? `#/notes/${parent}` : '#/notes';
-  };
+  // «Готово» — сразу в список заметок (с любой глубины вложенности)
+  $('#page-done').onclick = () => { location.hash = '#/notes'; };
   updatePageFavButton();
   $('#page-fav').onclick = () => setPageFavorite(pageById(id) || S.page, !S.page.favorite_at);
   presealPage();
