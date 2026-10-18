@@ -2870,7 +2870,7 @@ function doneSection() {
   const shown = S.doneAll ? done : done.slice(0, DONE_PAGE);
   return `<section class="task-group fold done-group">
     <div class="toc-head"><h3><button class="trash-toggle ${S.doneOpen ? 'open' : ''}" data-fold="done" aria-expanded="${S.doneOpen}">
-      ${icon('chevron')}<span>Завершённые</span><span class="trash-n">${done.length}</span></button></h3></div>
+      ${icon('chevron')}<span>Завершённые</span>${S.doneOpen ? `<span class="trash-n">${done.length}</span>` : ''}</button></h3></div>
     ${S.doneOpen ? `<div class="task-list">${shown.map(taskRow).join('')}</div>
       ${shown.length < done.length ? `<button class="btn ghost more-btn" data-done-all>Показать все (${done.length})</button>` : ''}` : ''}
   </section>`;
