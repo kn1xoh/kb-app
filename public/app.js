@@ -5,8 +5,8 @@
    добавьте объект сюда и функцию отрисовки в render<Имя>().
    ========================================================= */
 const SECTIONS = [
-  { id: 'notes', title: 'Заметки', icon: 'book', hint: 'Заметки с текстом, вложенные друг в друга' },
   { id: 'tasks', title: 'Задачи', icon: 'tasks', hint: 'Список дел и доска' },
+  { id: 'notes', title: 'Заметки', icon: 'book', hint: 'Заметки с текстом, вложенные друг в друга' },
 ];
 
 // Палитра цветов статусов: ключ хранится на сервере, цвет берётся из CSS-переменной --st-<ключ> (своя для тёмной темы)
@@ -1000,8 +1000,8 @@ document.addEventListener('click', (e) => {
 window.addEventListener('hashchange', route);
 const LAST_SECTION_KEY = 'kb-last-section';
 const lastSection = () => {
-  const id = store.get(LAST_SECTION_KEY, 'notes');
-  return SECTIONS.some((s) => s.id === id) ? id : 'notes';
+  const id = store.get(LAST_SECTION_KEY, SECTIONS[0].id);
+  return SECTIONS.some((s) => s.id === id) ? id : SECTIONS[0].id;
 };
 async function route() {
   if (!S.user) return;
@@ -4336,8 +4336,8 @@ function confirmTyped({ title, text, okText = 'Удалить' }) {
    ========================================================= */
 const SETTINGS_TABS = [
   { id: 'general', title: 'Общие', icon: 'gear', fill: fillGeneralSettings },
-  { id: 'notes', title: 'Заметки', icon: 'book', fill: fillNotesSettings },
   { id: 'tasks', title: 'Задачи', icon: 'tasks', fill: fillTaskSettings },
+  { id: 'notes', title: 'Заметки', icon: 'book', fill: fillNotesSettings },
 ];
 
 function openSettings(tab = 'general') {
