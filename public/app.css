@@ -1207,3 +1207,14 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
   .tb-hist .tb-sep { display: none; }
   .tb-block { min-width: 0; }
 }
+
+/* ---------- перетаскивание в «Избранное» ---------- */
+#tree.fav-target { background: var(--accent-soft); border-radius: 8px; box-shadow: inset 0 0 0 1.5px var(--accent); }
+#tree.fav-target-empty .tree-empty { color: var(--accent); }
+.fav-row.drop-before::before, .fav-row.drop-after::after {
+  content: ""; position: absolute; left: 6px; right: 6px; height: 2px; background: var(--accent); border-radius: 2px; pointer-events: none;
+}
+.fav-row.drop-before::before { top: -1px; }
+.fav-row.drop-after::after { bottom: -1px; }
+.fav-row.dragging { opacity: .4; }
+.task-row[draggable="true"] { -webkit-user-drag: element; }

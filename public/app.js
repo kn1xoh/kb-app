@@ -938,6 +938,7 @@ function renderShell() {
       <button class="fab" id="fab" hidden></button>
     </div>`;
   renderTree();
+  setupFavDnD();
   updateCounts();
   $('#open-search').onclick = openSearch;
   $('#user-btn').onclick = (e) => openUserMenu(e.currentTarget);
@@ -1058,30 +1059,131 @@ const noteIcon = (id, cls = '') => (childrenOf(id).length ? icon('notes', `note-
 const numOrIcon = (nums, id, cls) => (S.numbering ? `<span class="${cls}">${nums.get(id)}</span>` : noteIcon(id, cls === 'tree-num' ? 'doc' : ''));
 
 // Sidebar "Избранное": favourite notes in the Notes section, favourite tasks in the Tasks section
+const byFavOrder = (a, b) => toDate(a.favorite_at) - toDate(b.favorite_at) || a.id - b.id;
+const favList = (kind) => (kind === 'tasks' ? S.tasks : S.pages).filter((x) => x.favorite_at).sort(byFavOrder);
 function renderTree() {
   const box = $('#tree');
   if (!box) return;
   const tasksMode = S.section === 'tasks';
   $('#fav-title').textContent = tasksMode ? 'Избранные задачи' : 'Избранные заметки';
-  const byAdded = (a, b) => toDate(a.favorite_at) - toDate(b.favorite_at);
   const unfav = `<button class="icon-btn fav-remove" data-unfav title="Убрать из избранного" aria-label="Убрать из избранного">${icon('x')}</button>`;
   if (tasksMode) {
-    const favs = S.tasks.filter((t) => t.favorite_at).sort(byAdded);
-    box.innerHTML = favs.map((t) => `
-      <div class="fav-row ${isDone(t) ? 'done' : ''}" data-fav-task="${t.id}" role="button" tabindex="0">
+    box.innerHTML = favList('tasks').map((t) => `
+      <div class="fav-row ${isDone(t) ? 'done' : ''}" data-fav-task="${t.id}" draggable="true" role="button" tabindex="0">
         <span class="fav-dot" style="background:${statusColor(t.status)}" title="${esc(statusOf(t.status).name)}"></span>
         <span class="fav-title">${esc(taskTitle(t))}</span>${unfav}
       </div>`).join('')
-      || `<div class="tree-empty">Откройте задачу и нажмите ${icon('star', 'inline-star')} — она появится здесь.</div>`;
+      || `<div class="tree-empty">Откройте задачу и нажмите ${icon('star', 'inline-star')} или перетащите её сюда.</div>`;
   } else {
     const nums = pageNumbers();
-    const favs = S.pages.filter((p) => p.favorite_at).sort(byAdded);
-    box.innerHTML = favs.map((p) => `
-      <a class="fav-row ${p.id === S.page?.id ? 'active' : ''}" href="#/notes/${p.id}" data-fav-page="${p.id}">
+    box.innerHTML = favList('pages').map((p) => `
+      <a class="fav-row ${p.id === S.page?.id ? 'active' : ''}" href="#/notes/${p.id}" data-fav-page="${p.id}" draggable="true">
         ${numOrIcon(nums, p.id, 'tree-num')}
         <span class="fav-title ${p.title.trim() ? '' : 'untitled'}">${esc(titleOf(p))}</span>${unfav}
       </a>`).join('')
-      || `<div class="tree-empty">Откройте заметку и нажмите ${icon('star', 'inline-star')} вверху — она появится здесь.</div>`;
+      || `<div class="tree-empty">Откройте заметку и нажмите ${icon('star', 'inline-star')} вверху или перетащите её сюда.</div>`;
+  }
+}
+
+/* Перетаскивание в «Избранное» (мышью, на компьютере):
+   строки избранного можно менять местами, а заметку или задачу из раздела — бросить в избранное
+   в нужное место. Источники: строки «Все заметки», подзаметки, «Недавно изменённые»,
+   строки списка задач и карточки доски. */
+let favDrag = null; // { kind: 'pages' | 'tasks', id, fromFav }
+const FAV_SOURCES = '.fav-row, .outline-row, .toc-row, .recent-card, #tasks-body [data-task]';
+document.addEventListener('dragstart', (e) => {
+  const el = e.target.closest?.(FAV_SOURCES);
+  favDrag = null;
+  if (!el) return;
+  if (el.classList.contains('fav-row')) {
+    favDrag = el.dataset.favTask
+      ? { kind: 'tasks', id: Number(el.dataset.favTask), fromFav: true }
+      : { kind: 'pages', id: Number(el.dataset.favPage), fromFav: true };
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(favDrag.id));
+    requestAnimationFrame(() => el.classList.add('dragging'));
+  } else if (el.dataset.task) favDrag = { kind: 'tasks', id: Number(el.dataset.task) };
+  else {
+    const id = Number(el.dataset.id || el.getAttribute('href')?.split('/')[2]);
+    if (id) favDrag = { kind: 'pages', id };
+  }
+}, true);
+document.addEventListener('dragend', () => {
+  favDrag = null;
+  clearFavDrop();
+  $$('#tree .fav-row.dragging').forEach((r) => r.classList.remove('dragging'));
+});
+function clearFavDrop() {
+  const tree = $('#tree');
+  if (!tree) return;
+  tree.classList.remove('fav-target', 'fav-target-empty');
+  $$('.fav-row', tree).forEach((r) => r.classList.remove('drop-before', 'drop-after'));
+}
+// Куда встанет элемент: перед какой строкой (по середине строки), иначе в конец
+function favDropPlace(e) {
+  const rows = $$('#tree .fav-row:not(.dragging)');
+  const before = rows.find((r) => { const b = r.getBoundingClientRect(); return e.clientY < b.top + b.height / 2; });
+  return { rows, before };
+}
+function setupFavDnD() {
+  const tree = $('#tree');
+  const accepts = () => favDrag && favDrag.kind === (S.section === 'tasks' ? 'tasks' : 'pages');
+  tree.addEventListener('dragover', (e) => {
+    if (!accepts()) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move'; // другие перетаскивания разрешают только move
+    clearFavDrop();
+    const { rows, before } = favDropPlace(e);
+    if (!favDrag.fromFav) tree.classList.add('fav-target');
+    if (!rows.length) { tree.classList.add('fav-target-empty'); return; }
+    if (before) before.classList.add('drop-before');
+    else rows[rows.length - 1].classList.add('drop-after');
+  });
+  tree.addEventListener('dragleave', (e) => {
+    if (!tree.contains(e.relatedTarget)) clearFavDrop();
+  });
+  tree.addEventListener('drop', (e) => {
+    if (!accepts()) return;
+    e.preventDefault();
+    const { kind, id } = favDrag;
+    const { before } = favDropPlace(e);
+    clearFavDrop();
+    const ids = favList(kind).map((x) => x.id).filter((x) => x !== id);
+    const at = before ? ids.indexOf(Number(before.dataset.favTask || before.dataset.favPage)) : -1;
+    ids.splice(at < 0 ? ids.length : at, 0, id);
+    setFavOrder(kind, ids, id);
+  });
+}
+
+async function setFavOrder(kind, ids, movedId) {
+  const list = kind === 'tasks' ? S.tasks : S.pages;
+  const byId = (id) => list.find((x) => x.id === id);
+  const added = !byId(movedId)?.favorite_at;
+  const prev = ids.map((id) => [id, byId(id)?.favorite_at || null]);
+  // сразу показываем новый порядок, потом берём время с сервера
+  const base = Date.now() - ids.length * 1000;
+  ids.forEach((id, i) => { const x = byId(id); if (x) x.favorite_at = new Date(base + i * 1000).toISOString().slice(0, 19).replace('T', ' '); });
+  afterFavChange(kind, movedId);
+  try {
+    const { items } = await api('POST', '/api/favorites/order', { kind, ids });
+    items.forEach((it) => { const x = byId(it.id); if (x) x.favorite_at = it.favorite_at; });
+    afterFavChange(kind, movedId);
+    if (added) toast('Добавлено в избранное');
+  } catch (err) {
+    prev.forEach(([id, v]) => { const x = byId(id); if (x) x.favorite_at = v; });
+    afterFavChange(kind, movedId);
+    fail(err);
+  }
+}
+function afterFavChange(kind, id) {
+  renderTree();
+  if (kind === 'tasks') {
+    if (S.section === 'tasks') renderTasksBody();
+    const btn = $('#tp-fav');
+    if (btn && Number(btn.dataset.id) === id) setStarButton(btn, !!taskById(id)?.favorite_at);
+  } else {
+    if (S.page?.id === id) { S.page.favorite_at = pageById(id)?.favorite_at; updatePageFavButton(); }
+    if (!S.page && S.section === 'notes') renderNotesHome();
   }
 }
 
@@ -2707,7 +2809,7 @@ const selBox = (t) => {
   return `<span class="sel-box ${on ? 'on' : ''}" role="checkbox" aria-checked="${on}" aria-label="Выбрать"></span>`;
 };
 const rowCls = (t) => `${isDone(t) ? 'done' : ''} ${S.taskSelect ? 'sel' : ''} ${S.taskSelected.has(t.id) ? 'selected' : ''}`;
-const taskRow = (t) => `<div class="task-row ${rowCls(t)}" data-task="${t.id}">${selBox(t)}<span class="t-title ${t.title.trim() ? '' : 'untitled'}">${esc(taskTitle(t))}${favMark(t)}</span>${taskMeta(t)}</div>`;
+const taskRow = (t) => `<div class="task-row ${rowCls(t)}" ${S.taskSelect ? '' : 'draggable="true"'} data-task="${t.id}">${selBox(t)}<span class="t-title ${t.title.trim() ? '' : 'untitled'}">${esc(taskTitle(t))}${favMark(t)}</span>${taskMeta(t)}</div>`;
 const taskCard = (t) => `<div class="card ${rowCls(t)}" ${S.taskSelect ? '' : 'draggable="true"'} data-task="${t.id}">${selBox(t)}<div class="c-title ${t.title.trim() ? '' : 'untitled'}">${esc(taskTitle(t))}${favMark(t)}</div>${taskMeta(t)}</div>`;
 
 function taskBulkBar() {

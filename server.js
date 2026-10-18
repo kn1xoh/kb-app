@@ -491,6 +491,27 @@ app.post('/api/pages/:id/favorite', auth, async (req, res) => {
   res.json({ favorite_at: (await getPage(req.user.id, page.id)).favorite_at });
 });
 
+// Порядок избранного (и добавление перетаскиванием): клиент присылает весь список по порядку.
+// Порядок хранится в favorite_at — проставляем возрастающее время, поэтому новые поля в базе не нужны.
+app.post('/api/favorites/order', auth, async (req, res) => {
+  const { kind, ids } = req.body || {};
+  const table = kind === 'pages' ? 'pages' : kind === 'tasks' ? 'tasks' : null;
+  if (!table || !Array.isArray(ids) || ids.length > 1000 || !ids.every(Number.isInteger)) {
+    return httpError(res, 400, 'Некорректные данные');
+  }
+  const uniq = [...new Set(ids)];
+  await db.tx(async () => {
+    for (const [i, id] of uniq.entries()) {
+      await db.run(`UPDATE ${table} SET favorite_at = datetime('now', ?)
+        WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, `-${uniq.length - i} seconds`, id, req.user.id);
+    }
+  });
+  const items = uniq.length
+    ? await db.all(`SELECT id, favorite_at FROM ${table} WHERE user_id = ? AND deleted_at IS NULL AND id IN (${uniq.map(() => '?').join(',')})`, req.user.id, ...uniq)
+    : [];
+  res.json({ items });
+});
+
 // ---------- notes trash («Недавно удалённые») ----------
 
 const TRASH_DAYS = 30;
