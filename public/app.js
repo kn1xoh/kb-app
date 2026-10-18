@@ -573,6 +573,8 @@ window.addEventListener('online', () => Unsaved.retry(true));
 const quoted = (s, def) => (s && s.trim() ? `«${s.trim().length > 40 ? `${s.trim().slice(0, 40)}…` : s.trim()}»` : def);
 
 // ---------- state ----------
+const RECENT_DEFAULT = 5, RECENT_MIN = 1, RECENT_MAX = 10; // «Недавно изменённые»: сколько показывать
+try { localStorage.removeItem('kb-numbering'); } catch {} // нумерация заметок убрана (19 окт 2026)
 const S = {
   user: null,
   pages: [],
@@ -582,7 +584,8 @@ const S = {
   taskView: store.get('kb-task-view', 'list'),
   taskFilter: { due: 'all', status: [], prio: [] },
   page: null, // currently open page with content
-  numbering: store.get('kb-numbering', false),
+  recentShow: store.get('kb-recent-show', true), // блок «Недавно изменённые» на главной Заметок
+  recentCount: (() => { const n = store.get('kb-recent-count', RECENT_DEFAULT); return Number.isInteger(n) && n >= RECENT_MIN && n <= RECENT_MAX ? n : RECENT_DEFAULT; })(),
   selectMode: false, // bulk selection on the notes home
   selected: new Set(),
   trash: null, // «Недавно удалённые» заметки: { days, items }, null — ещё не загружено
@@ -1059,19 +1062,7 @@ function descendants(id) {
 }
 const titleOf = (p) => p?.title?.trim() || 'Без названия';
 
-// Outline numbers like in a book's table of contents: 1, 1.1, 1.2, 2…
-function pageNumbers() {
-  const map = new Map();
-  const walk = (pid, prefix) => childrenOf(pid).forEach((p, i) => {
-    const n = prefix ? `${prefix}.${i + 1}` : `${i + 1}`;
-    map.set(p.id, n);
-    walk(p.id, n);
-  });
-  walk(null, '');
-  return map;
-}
 const noteIcon = (id, cls = '') => (childrenOf(id).length ? icon('notes', `note-ic has-kids ${cls}`) : icon('note', `note-ic ${cls}`));
-const numOrIcon = (nums, id, cls) => (S.numbering ? `<span class="${cls}">${nums.get(id)}</span>` : noteIcon(id, cls === 'tree-num' ? 'doc' : ''));
 
 // Sidebar "Избранное": favourite notes in the Notes section, favourite tasks in the Tasks section
 const byFavOrder = (a, b) => toDate(a.favorite_at) - toDate(b.favorite_at) || a.id - b.id;
@@ -1090,10 +1081,9 @@ function renderTree() {
       </div>`).join('')
       || `<div class="tree-empty">Откройте задачу и нажмите ${icon('star', 'inline-star')} или перетащите её сюда.</div>`;
   } else {
-    const nums = pageNumbers();
-    box.innerHTML = favList('pages').map((p) => `
+        box.innerHTML = favList('pages').map((p) => `
       <a class="fav-row ${p.id === S.page?.id ? 'active' : ''}" href="#/notes/${p.id}" data-fav-page="${p.id}" draggable="true">
-        ${numOrIcon(nums, p.id, 'tree-num')}
+        ${noteIcon(p.id, 'doc')}
         <span class="fav-title ${p.title.trim() ? '' : 'untitled'}">${esc(titleOf(p))}</span>${unfav}
       </a>`).join('')
       || `<div class="tree-empty">Откройте заметку и нажмите ${icon('star', 'inline-star')} вверху или перетащите её сюда.</div>`;
@@ -1496,8 +1486,7 @@ function renderNotesHome() {
   S.page = null;
   setActiveNav('notes');
   renderTree();
-  const nums = pageNumbers();
-  const recent = [...S.pages].sort((a, b) => toDate(b.updated_at) - toDate(a.updated_at)).slice(0, 4);
+    const recent = [...S.pages].sort((a, b) => toDate(b.updated_at) - toDate(a.updated_at)).slice(0, S.recentShow ? S.recentCount : 0);
   const rows = [];
   const anyOpen = S.pages.some((p) => homeExpanded.has(p.id) && childrenOf(p.id).length);
   const sel = S.selectMode ? selectionInfo() : null;
@@ -1509,7 +1498,7 @@ function renderNotesHome() {
     rows.push(`<li><a class="outline-row depth-${Math.min(depth, 3)} ${state ? 'selected' : ''}" href="#/notes/${p.id}" ${S.selectMode ? '' : 'draggable="true"'} data-id="${p.id}" style="padding-left:${12 + depth * 26}px;--depth:${depth}">
       ${S.selectMode ? `<span class="sel-box ${state}" role="checkbox" aria-checked="${!!state}" aria-label="Выбрать"></span>` : ''}
       ${kids ? `<button class="twisty ${closed ? '' : 'open'}" data-home="toggle" aria-label="${closed ? 'Развернуть' : 'Свернуть'}">${icon('chevron')}</button>` : '<span class="twisty"></span>'}
-      ${numOrIcon(nums, p.id, 'toc-num')}
+      ${noteIcon(p.id)}
       <span class="toc-title ${p.title.trim() ? '' : 'untitled'}"><span class="tt">${esc(titleOf(p))}</span>${p.favorite_at ? icon('star', 'filled mini-star') : ''}${inside ? `<span class="kids-n" title="${inside} ${plural(inside, 'подзаметка', 'подзаметки', 'подзаметок')} внутри">${inside}</span>` : ''}</span>
       <span class="toc-meta">${ago(p.updated_at)}</span>
       <button class="icon-btn row-add" data-home="add" title="Добавить подзаметку" aria-label="Добавить подзаметку">${icon('plus')}</button>
@@ -1531,7 +1520,7 @@ function renderNotesHome() {
         <button class="btn primary" id="home-new">${icon('plus')}Новая заметка</button>
       </div>
       ${total ? `
-      <section class="recent">
+      ${recent.length ? `<section class="recent">
         <div class="toc-head"><h3>Недавно изменённые</h3></div>
         <div class="recent-list">${recent.map((p) => { const up = ancestors(p.id).map(titleOf); return `<a class="recent-card" href="#/notes/${p.id}"${up.length ? ` title="${esc(up.join(' › '))}"` : ''}>
           ${noteIcon(p.id)}
@@ -1541,7 +1530,7 @@ function renderNotesHome() {
           </span>
           <span class="rc-time">${ago(p.updated_at)}</span>
         </a>`; }).join('')}</div>
-      </section>
+      </section>` : ''}
       <section class="all-notes">
       <div class="toc-head">
         <h3>Все заметки</h3>
@@ -1550,7 +1539,7 @@ function renderNotesHome() {
           <button class="btn ghost ${S.selectMode ? 'on' : ''}" id="select-mode">${S.selectMode ? 'Готово' : 'Выбрать'}</button>
         </span>
       </div>
-      <ol class="toc outline ${S.selectMode ? 'selecting' : ''} ${S.numbering ? 'numbered' : ''}" id="outline">${rows.join('')}</ol>
+      <ol class="toc outline ${S.selectMode ? 'selecting' : ''}" id="outline">${rows.join('')}</ol>
       ${S.selectMode ? `
       <div class="bulk-bar" role="region" aria-label="Выбранные заметки">
         <span class="bulk-count">${sel.total
@@ -1882,7 +1871,7 @@ async function openPage(id) {
     <article class="page">
       <div id="crumbs-slot"></div>
       <textarea class="page-title" id="page-title" rows="1" placeholder="Без названия" maxlength="300">${esc(page.title)}</textarea>
-      <div class="page-meta"><span id="page-num"></span>${page.created_at ? `<span id="page-created" title="${esc(ago(page.created_at))}">Создана ${numDateTime(page.created_at)} · </span>` : ''}<span id="page-changed">${page.created_at ? 'изменена' : 'Изменено'} ${ago(page.updated_at)}</span></div>
+      <div class="page-meta">${page.created_at ? `<span id="page-created" title="${esc(ago(page.created_at))}">Создана ${numDateTime(page.created_at)} · </span>` : ''}<span id="page-changed">${page.created_at ? 'изменена' : 'Изменено'} ${ago(page.updated_at)}</span></div>
       <div id="toolbar-slot"></div>
       <div class="editor" id="editor" contenteditable="true" data-placeholder="Начните писать…">${page.content}</div>
       <section class="subpages" id="subpages"></section>
@@ -1929,8 +1918,6 @@ function renderCrumbs() {
   const slot = $('#crumbs-slot'), bar = $('.topbar');
   if (crumbsBelow.matches && slot) { if (el.parentElement !== slot) slot.append(el); }
   else if (bar && el.parentElement !== bar) $('.menu-toggle', bar).after(el);
-  const num = $('#page-num');
-  if (num) num.textContent = S.numbering ? `Заметка ${pageNumbers().get(S.page.id)} · ` : '';
   const items = [{ href: '#/notes', title: 'Заметки', root: true },
     ...[...ancestors(S.page.id), pageById(S.page.id)].filter(Boolean).map((p) => ({ href: `#/notes/${p.id}`, title: titleOf(p), id: p.id }))];
   const last = items.length - 1;
@@ -1979,8 +1966,7 @@ function renderCrumbs() {
 function renderSubpages() {
   const el = $('#subpages');
   if (!el || !S.page) return;
-  const nums = pageNumbers();
-  const rows = [];
+    const rows = [];
   const walk = (pid, depth) => childrenOf(pid).forEach((k) => {
     rows.push({ k, depth });
     if (depth < 1) walk(k.id, depth + 1);
@@ -1994,7 +1980,7 @@ function renderSubpages() {
     ${rows.length ? `<ol class="toc">${rows.map(({ k, depth }) => {
       const hidden = depth === 1 ? descendants(k.id).length : 0;
       return `<li><a class="toc-row depth-${depth}" href="#/notes/${k.id}" draggable="true" data-id="${k.id}">
-        ${numOrIcon(nums, k.id, 'toc-num')}
+        ${noteIcon(k.id)}
         <span class="toc-title ${k.title.trim() ? '' : 'untitled'}">${esc(titleOf(k))}</span>
         <span class="toc-meta">${hidden ? `ещё ${hidden} внутри · ` : ''}${ago(k.updated_at)}</span>
       </a></li>`;
@@ -4390,18 +4376,36 @@ function fillGeneralSettings(m) {
 
 function fillNotesSettings(m) {
   m.innerHTML = `
-    <h3 class="set-caption">Вид</h3>
+    <h3 class="set-caption">Недавно изменённые</h3>
     <label class="set-row">
-      <span class="set-text"><b>Нумерация заметок</b><span>Номера 1, 1.1, 1.1.1 вместо значков в списке и левой панели</span></span>
-      <input type="checkbox" class="switch" id="set-numbering" role="switch" ${S.numbering ? 'checked' : ''}>
-    </label>`;
-  $('#set-numbering', m).onchange = (e) => {
-    S.numbering = e.target.checked;
-    store.set('kb-numbering', S.numbering);
-    renderTree();
-    if (S.page) { renderCrumbs(); renderSubpages(); }
-    else if (!location.hash.startsWith('#/tasks')) renderNotesHome();
+      <span class="set-text"><b>Показывать блок</b><span>Последние изменённые заметки над списком «Все заметки»</span></span>
+      <input type="checkbox" class="switch" id="set-recent" role="switch" ${S.recentShow ? 'checked' : ''}>
+    </label>
+    <div class="set-row recent-count-row">
+      <span class="set-text"><b>Сколько показывать</b></span>
+      <div class="stepper">
+        <button type="button" data-step="-1" aria-label="Меньше">−</button><span class="st-val" aria-live="polite"></span><button type="button" data-step="1" aria-label="Больше">+</button>
+      </div>
+    </div>`;
+  const rerender = () => { if (!S.page && !location.hash.startsWith('#/tasks')) renderNotesHome(); };
+  const paint = () => {
+    $('.recent-count-row', m).classList.toggle('off', !S.recentShow);
+    $('.st-val', m).textContent = S.recentCount;
+    $('[data-step="-1"]', m).disabled = !S.recentShow || S.recentCount <= RECENT_MIN;
+    $('[data-step="1"]', m).disabled = !S.recentShow || S.recentCount >= RECENT_MAX;
   };
+  const setCount = (n) => { S.recentCount = n; store.set('kb-recent-count', n); paint(); rerender(); };
+  $('#set-recent', m).onchange = (e) => {
+    S.recentShow = e.target.checked;
+    store.set('kb-recent-show', S.recentShow);
+    paint();
+    rerender();
+  };
+  $('.recent-count-row', m).onclick = (e) => {
+    const b = e.target.closest('[data-step]');
+    if (b && !b.disabled) setCount(Math.min(RECENT_MAX, Math.max(RECENT_MIN, S.recentCount + +b.dataset.step)));
+  };
+  paint();
 }
 
 // Переключатель «Напоминания на этом устройстве» в «Настройках задач»
