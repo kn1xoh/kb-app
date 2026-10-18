@@ -752,14 +752,9 @@ svg.note-ic.has-kids { color: var(--accent); }
 .toc-title.untitled, .rc-title.untitled { color: var(--faint); font-style: italic; }
 .outline-row .mini-star { margin-left: 6px; }
 
-/* Дерево: тонкие направляющие вместо рамок между вложенными строками */
-.outline-row:not(.depth-0) {
-  padding-top: 7px; padding-bottom: 7px;
-  background-image: repeating-linear-gradient(to right, transparent 0 10.5px, var(--line) 10.5px 11.5px, transparent 11.5px 26px);
-  background-size: calc(var(--depth) * 26px) 100%; background-position: 12px 0; background-repeat: no-repeat;
-}
+/* Дерево: вложенность — только отступом, без рамок и направляющих */
+.outline-row:not(.depth-0) { padding-top: 7px; padding-bottom: 7px; }
 ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent; }
-.outline.numbered .outline-row:not(.depth-0) { background-image: none; }
 
 /* «Недавно изменённые» — карточки */
 .recent-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
@@ -786,7 +781,6 @@ ol.outline li:has(> .outline-row:not(.depth-0)) { border-top-color: transparent;
 .outline-row .toc-title { display: flex; align-items: center; min-width: 0; }
 .outline-row .toc-title .tt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .outline-row .toc-title > svg.i, .outline-row .kids-n { flex: none; }
-.outline.selecting .outline-row:not(.depth-0) { background-position: 40px 0; }
 
 /* ---------- Задачи в стиле главной «Заметок» ---------- */
 .tasks-wrap { max-width: 860px; gap: 22px; }
