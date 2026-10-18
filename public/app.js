@@ -50,6 +50,7 @@ const ICONS = {
   link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
   hr: 'M4 12h16',
   clear: 'M5 6V4h13v2M11 4 8 20M6 20h5M15 14l5 5M20 14l-5 5',
+  copy: 'M10 9h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2zM16 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2',
   undo: 'M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11',
   redo: 'M15 14l5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13',
   move: 'M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20',
@@ -3280,6 +3281,51 @@ function setupBoardDnD(root) {
   });
 }
 
+// Текст из редактора для буфера обмена: пункты списков с «–» / «1.», чек-лист с ☐ / ☑, вложенность — отступом
+function editorPlainText(editor) {
+  const box = document.createElement('div');
+  box.innerHTML = editor.innerHTML;
+  box.querySelectorAll('li').forEach((li) => {
+    const list = li.parentElement;
+    let depth = 0;
+    for (let el = list.parentElement; el && el !== box; el = el.parentElement) if (el.tagName === 'LI') depth++;
+    let mark = '– ';
+    if (list.classList.contains('checklist')) mark = li.getAttribute('data-checked') === 'true' ? '☑ ' : '☐ ';
+    else if (list.tagName === 'OL') mark = `${[...list.children].indexOf(li) + 1}. `;
+    li.prepend('\u00a0\u00a0'.repeat(depth) + mark);
+  });
+  // innerText учитывает блоки и переносы только у элемента на странице — ставим копию за край экрана
+  box.style.cssText = 'position: fixed; left: -10000px; top: 0; width: 600px; white-space: normal;';
+  box.className = 'editor';
+  document.body.append(box);
+  const text = box.innerText;
+  box.remove();
+  return text.replace(/\u00a0/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// write() вызывается сразу по нажатию (без await до него) — иначе Safari не даёт доступ к буферу
+async function copyToClipboard(text, html) {
+  try {
+    if (window.ClipboardItem && navigator.clipboard?.write) {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/plain': new Blob([text], { type: 'text/plain' }),
+        'text/html': new Blob([html], { type: 'text/html' }),
+      })]);
+      return;
+    }
+  } catch { /* пробуем проще */ }
+  try { await navigator.clipboard.writeText(text); return; } catch { /* старый способ */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position: fixed; top: 0; left: 0; opacity: 0;';
+  document.body.append(ta);
+  ta.select();
+  const ok = document.execCommand('copy');
+  ta.remove();
+  if (!ok) throw new Error('copy');
+}
+
 function openTaskPanel(id, { justCreated = false } = {}) {
   const t = taskById(id);
   if (!t) return;
@@ -3300,7 +3346,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
         <div class="tp-actions">
           <span class="save-state tp-save" aria-live="polite"></span>
           <button class="icon-btn fav-btn" id="tp-fav" data-id="${t.id}"></button>
-          <button class="icon-btn" id="tp-delete" title="Удалить задачу" aria-label="Удалить задачу">${icon('trash')}</button>
+          <button class="icon-btn" id="tp-copy" title="Копировать название и описание" aria-label="Копировать название и описание">${icon('copy')}</button>
           <button class="done-btn" id="tp-close" title="Закрыть (Esc)">Готово</button>
         </div>
         <textarea class="page-title" id="tp-title" rows="1" maxlength="300" placeholder="Название задачи">${esc(t.title)}</textarea>
@@ -3324,6 +3370,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
         <div id="tp-toolbar"></div>
         <div class="editor" id="tp-desc" contenteditable="true" data-placeholder="Описание, заметки, чек-лист…">${t.description}</div>
       </div>
+      <div class="tp-foot"><button class="del-link" id="tp-delete">Удалить задачу</button></div>
     </div>`;
   document.body.append(ov, panel);
   // Индикатор сохранения, как у заметок: «Изменено» → «Сохранение…» → «Сохранено» / «Не сохранено»
@@ -3508,6 +3555,23 @@ function openTaskPanel(id, { justCreated = false } = {}) {
     await saveAll();
     await close();
     if (S.tasks.includes(t)) deleteTasks([t.id]);
+  };
+  // Копирование названия и описания: в буфер кладём и простой текст, и HTML (для Word / Google Docs)
+  $('#tp-copy', panel).onclick = (e) => {
+    const btn = e.currentTarget;
+    const name = $('#tp-title', panel).value.trim();
+    const desc = $('#tp-desc', panel);
+    const body = editorPlainText(desc);
+    if (!name && !body) { toast('Нечего копировать'); return; }
+    const text = [name, body].filter(Boolean).join('\n\n');
+    const html = (name ? `<h2>${esc(name)}</h2>` : '') + (body ? desc.innerHTML : '');
+    copyToClipboard(text, html).then(() => {
+      btn.innerHTML = icon('check');
+      btn.classList.add('copied');
+      clearTimeout(btn.copyTimer);
+      btn.copyTimer = setTimeout(() => { btn.innerHTML = icon('copy'); btn.classList.remove('copied'); }, 1500);
+      toast('Скопировано');
+    }, () => toast('Не удалось скопировать', 'error'));
   };
   // Только что созданная задача — курсор сразу в название
   // на телефоне курсор ставим только в новую задачу — иначе при каждом открытии выезжает клавиатура

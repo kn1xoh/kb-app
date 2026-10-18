@@ -1222,3 +1222,14 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
 .fav-row { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 #tree.touch-sorting { touch-action: none; }
 .fav-row.touch-lift { opacity: 1; z-index: 2; background: var(--bg); box-shadow: 0 6px 18px rgba(0,0,0,.16); transition: box-shadow .15s; }
+
+/* ===== копирование и удаление в карточке задачи ===== */
+#tp-copy.copied { color: var(--accent); }
+#tp-copy.copied svg.i { stroke-width: 2.4; }
+.tp-foot { display: flex; justify-content: center; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+.del-link { background: none; border: 0; color: var(--danger); font: 500 14.5px/1 var(--font-ui); padding: 10px 16px; border-radius: 8px; cursor: pointer; }
+.del-link:hover { background: var(--danger-soft); }
+.del-link:focus-visible { outline: 2px solid var(--danger); outline-offset: 1px; }
+@media (max-width: 860px), (pointer: coarse) {
+  .del-link { height: var(--tap); font-size: 16px; }
+}
