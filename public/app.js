@@ -3605,6 +3605,35 @@ async function openPageHistory(id) {
   openHistory('page', id, { onRestore: (v, prev) => restorePageVersion(id, v, prev) });
 }
 
+/* ---------- ширина карточки задачи на компьютере: тянуть за левый край ---------- */
+const TP_MIN = 440, TP_DEFAULT = 560;
+function setupPanelSize(panel) {
+  const grip = document.createElement('div');
+  grip.className = 'panel-grip';
+  grip.title = 'Потяните, чтобы изменить ширину (двойной клик — обычная ширина)';
+  panel.prepend(grip);
+  const maxW = () => Math.max(TP_MIN, innerWidth - 96);
+  const apply = (w) => { panel.style.width = w ? `${Math.min(Math.max(w, TP_MIN), maxW())}px` : ''; };
+  apply(store.get('kb-task-width', 0));
+  grip.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    panel.classList.add('resizing');
+    const move = (ev) => apply(innerWidth - ev.clientX);
+    const up = () => {
+      grip.removeEventListener('pointermove', move);
+      panel.classList.remove('resizing');
+      const w = Math.round(panel.getBoundingClientRect().width);
+      store.set('kb-task-width', w === TP_DEFAULT ? 0 : w);
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up, { once: true });
+    grip.addEventListener('pointercancel', up, { once: true });
+  });
+  grip.ondblclick = () => { apply(0); store.set('kb-task-width', 0); };
+}
+
 function openTaskPanel(id, { justCreated = false } = {}) {
   const t = taskById(id);
   if (!t) return;
@@ -3654,6 +3683,7 @@ function openTaskPanel(id, { justCreated = false } = {}) {
       <div class="tp-foot"><button class="del-link" id="tp-delete">Удалить задачу</button></div>
     </div>`;
   document.body.append(ov, panel);
+  setupPanelSize(panel);
   // Индикатор сохранения, как у заметок: «Изменено» → «Сохранение…» → «Сохранено» / «Не сохранено»
   const saveEl = $('.tp-save', panel);
   let saving = 0, saveFailed = false;

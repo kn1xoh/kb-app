@@ -1380,3 +1380,16 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
 @media (max-width: 860px), (pointer: coarse) {
   .stepper button { width: var(--tap); height: var(--tap); }
 }
+
+/* ---------- ширина карточки задачи: тянуть за левый край (только компьютер) ---------- */
+.panel-grip { position: absolute; left: -4px; top: 0; bottom: 0; width: 9px; z-index: 2; cursor: ew-resize; touch-action: none; }
+.panel-grip::after { content: ''; position: absolute; left: 3px; top: 50%; width: 3px; height: 44px; margin-top: -22px; border-radius: 2px; background: var(--line); transition: background .15s, height .15s; }
+@media (hover: hover) { .panel-grip:hover::after { background: var(--accent); height: 64px; margin-top: -32px; } }
+.panel.resizing .panel-grip::after { background: var(--accent); height: 64px; margin-top: -32px; }
+.panel.resizing { user-select: none; }
+.panel[style*="width"] { max-width: max(440px, calc(100vw - 96px)); }
+body:has(.panel.resizing) { cursor: ew-resize; }
+@media (max-width: 860px) {
+  .panel-grip { display: none; }
+  .panel[style*="width"] { width: min(560px, 100%) !important; }
+}
