@@ -1332,12 +1332,15 @@ html.kb-open .panel { top: var(--kb-top, 0px); bottom: auto; height: var(--kb-h,
 .set-tabs { display: flex; margin-top: -4px; }
 .set-tabs button { flex: 1; justify-content: center; min-width: 0; }
 .set-pane { display: grid; gap: 16px; }
-.theme-seg { display: flex; gap: 6px; margin-top: 8px; }
-.theme-seg button { flex: 1; min-width: 0; height: 36px; padding: 0 6px; border: 1px solid var(--line); border-radius: 8px; background: none; color: var(--fg); font: inherit; font-size: 14px; white-space: nowrap; }
+.theme-seg { display: flex; flex-direction: column; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.theme-seg button { display: flex; align-items: center; height: 40px; padding: 0 14px; border: 0; border-radius: 0; background: none; color: var(--fg); font: inherit; font-size: 14px; text-align: left; }
+.theme-seg button + button { border-top: 1px solid var(--line); }
+.theme-seg .ts-check { margin-left: auto; width: 18px; height: 18px; visibility: hidden; }
 @media (hover: hover) { .theme-seg button:hover { background: var(--hover); } }
-.theme-seg button.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; font-weight: 500; }
+.theme-seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+.theme-seg button.on .ts-check { visibility: visible; }
 @media (max-width: 860px), (pointer: coarse) {
-  .theme-seg button { height: var(--tap); }
+  .theme-seg button { height: 44px; font-size: 15px; }
   .set-tabs button { height: calc(var(--tap) - 6px); padding: 0 6px; }
 }
 

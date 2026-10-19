@@ -4358,7 +4358,7 @@ function fillGeneralSettings(m) {
   m.innerHTML = `
     <h3 class="set-caption">Тема</h3>
     <div class="theme-seg" role="radiogroup" aria-label="Тема">
-      ${opts.map(([v, t]) => `<button type="button" role="radio" data-theme="${v}">${t}</button>`).join('')}
+      ${opts.map(([v, t]) => `<button type="button" role="radio" data-theme="${v}"><span>${t}</span>${icon('check', 'ts-check')}</button>`).join('')}
     </div>`;
   const paint = () => $$('[data-theme]', m).forEach((b) => {
     const on = b.dataset.theme === themeChoice();
